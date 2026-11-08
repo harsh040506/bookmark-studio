@@ -66,8 +66,12 @@ const MAX_CONCURRENT_CAPTURES = 5;
 let active = 0;
 const waiting: (() => void)[] = [];
 
+/**
+ * A slot is handed straight to the next waiter, so the count never dips and lets a sixth
+ * window in between. It is only released after the window is confirmed gone.
+ */
 function acquire(): Promise<void> {
-  if (active < MAX_CONCURRENT_CAPTURES) {
+  if (active < MAX_CONCURRENT_CAPTURES && !waiting.length) {
     active += 1;
     return Promise.resolve();
   }
@@ -75,9 +79,47 @@ function acquire(): Promise<void> {
 }
 
 function release(): void {
-  active -= 1;
-  waiting.shift()?.();
+  const next = waiting.shift();
+  if (next) next();
+  else active = Math.max(0, active - 1);
 }
+
+/**
+ * Capture windows that are currently open, kept in session storage.
+ *
+ * Chrome can stop this service worker at any moment, and a worker that stops mid-capture
+ * forgets the window it opened. The next time it starts it closes anything left over, so
+ * an orphaned window can never accumulate or count against the five.
+ */
+const OPEN_WINDOWS_KEY = "capture-windows";
+
+async function rememberWindow(id: number, open: boolean): Promise<void> {
+  try {
+    const stored = await chrome.storage.session.get(OPEN_WINDOWS_KEY);
+    const ids = new Set<number>((stored[OPEN_WINDOWS_KEY] as number[] | undefined) ?? []);
+    if (open) ids.add(id);
+    else ids.delete(id);
+    await chrome.storage.session.set({ [OPEN_WINDOWS_KEY]: [...ids] });
+  } catch {
+    // Session storage is a safety net, not a requirement for capturing.
+  }
+}
+
+async function closeLeftoverWindows(): Promise<void> {
+  try {
+    const stored = await chrome.storage.session.get(OPEN_WINDOWS_KEY);
+    const ids = (stored[OPEN_WINDOWS_KEY] as number[] | undefined) ?? [];
+    await Promise.all(ids.map((id) => chrome.windows.remove(id).catch(() => undefined)));
+    await chrome.storage.session.set({ [OPEN_WINDOWS_KEY]: [] });
+  } catch {
+    // Nothing to tidy.
+  }
+}
+
+void closeLeftoverWindows();
+
+/** How long to wait for a closing window before giving its slot back anyway. */
+const CLOSE_GRACE_MS = 5_000;
 
 class CaptureTimeout extends Error {}
 
@@ -97,8 +139,10 @@ function withDeadline<T>(work: Promise<T>, ms: number): Promise<T> {
   });
 }
 
-function waitForComplete(tabId: number): Promise<void> {
-  return new Promise((resolve, reject) => {
+/** Resolves when the tab finishes loading. The returned `cancel` removes the listeners. */
+function waitForComplete(tabId: number): { done: Promise<void>; cancel: () => void } {
+  let cleanup = () => undefined as void;
+  const done = new Promise<void>((resolve, reject) => {
     const onUpdated = (id: number, changeInfo: chrome.tabs.TabChangeInfo) => {
       if (id !== tabId) return;
       if (changeInfo.status === "complete") {
@@ -111,13 +155,14 @@ function waitForComplete(tabId: number): Promise<void> {
       cleanup();
       reject(new Error("Tab closed before it finished loading"));
     };
-    const cleanup = () => {
+    cleanup = () => {
       chrome.tabs.onUpdated.removeListener(onUpdated);
       chrome.tabs.onRemoved.removeListener(onRemoved);
     };
     chrome.tabs.onUpdated.addListener(onUpdated);
     chrome.tabs.onRemoved.addListener(onRemoved);
   });
+  return { done, cancel: () => cleanup() };
 }
 
 function delay(ms: number): Promise<void> {
@@ -192,10 +237,12 @@ async function captureOnce(
   const corner = await screenCorner(askingTabId, viewport.width, viewport.height);
   await acquire();
 
-  let windowId: number | undefined;
+  /** The window being created, kept so it can be closed even if the deadline wins the race. */
+  let creating: Promise<chrome.windows.Window> | undefined;
+  let stopWaiting: (() => void) | undefined;
   try {
     const run = (async (): Promise<CaptureOk> => {
-      const win = await chrome.windows.create({
+      creating = chrome.windows.create({
         url: rawUrl,
         type: "popup",
         width: viewport.width,
@@ -203,12 +250,15 @@ async function captureOnce(
         focused: false,
         ...corner,
       });
-      windowId = win.id;
+      const win = await creating;
+      if (win.id !== undefined) void rememberWindow(win.id, true);
       const tab = win.tabs?.[0];
       if (!win.id || !tab?.id) throw new Error("Could not open a capture window");
 
       if (tab.status !== "complete") {
-        await withDeadline(waitForComplete(tab.id), NAVIGATION_TIMEOUT_MS);
+        const loading = waitForComplete(tab.id);
+        stopWaiting = loading.cancel;
+        await withDeadline(loading.done, NAVIGATION_TIMEOUT_MS);
       }
       await delay(SETTLE_DELAY_MS);
 
@@ -227,6 +277,7 @@ async function captureOnce(
       const dataUrl = await chrome.tabs.captureVisibleTab(win.id, { format: "jpeg", quality: 82 });
       return { ok: true, dataUrl, capturedAt: Date.now() };
     })();
+    run.catch(() => undefined);
 
     return await withDeadline(run, CAPTURE_BUDGET_MS);
   } catch (error) {
@@ -239,8 +290,20 @@ async function captureOnce(
       kind: "failed",
     };
   } finally {
-    if (windowId !== undefined) {
-      await chrome.windows.remove(windowId).catch(() => undefined);
+    stopWaiting?.();
+    // The window must be gone before the slot goes to the next capture. If it was still
+    // being created when the deadline fired, wait for it so it can be closed too.
+    if (creating) {
+      const pending = creating;
+      await Promise.race([
+        (async () => {
+          const win = await pending.catch(() => undefined);
+          if (win?.id === undefined) return;
+          await chrome.windows.remove(win.id).catch(() => undefined);
+          await rememberWindow(win.id, false);
+        })(),
+        delay(CLOSE_GRACE_MS),
+      ]);
     }
     release();
   }

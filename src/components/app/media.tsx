@@ -78,6 +78,55 @@ export function FaviconPlate({
   );
 }
 
+/**
+ * Whether an icon is a light mark that would vanish on the white favicon chip.
+ *
+ * Many sites ship a white logo for dark browser UIs (GitHub, Framer and others in a real
+ * Chrome export), and on the white chip those render as a blank square. The icon is drawn
+ * once onto a tiny canvas and its opaque pixels averaged; results are cached per source,
+ * so a 1,300-row library measures each distinct icon once.
+ */
+const lightness = new Map<string, boolean>();
+const MAX_LIGHTNESS_ENTRIES = 4000;
+
+function measureLightness(source: string): Promise<boolean> {
+  const known = lightness.get(source);
+  if (known !== undefined) return Promise.resolve(known);
+  return new Promise((resolve) => {
+    const image = new Image();
+    image.decoding = "async";
+    image.onload = () => {
+      let light = false;
+      try {
+        const canvas = document.createElement("canvas");
+        canvas.width = 16;
+        canvas.height = 16;
+        const context = canvas.getContext("2d", { willReadFrequently: true });
+        if (context) {
+          context.drawImage(image, 0, 0, 16, 16);
+          const { data } = context.getImageData(0, 0, 16, 16);
+          let sum = 0;
+          let weight = 0;
+          for (let index = 0; index < data.length; index += 4) {
+            const alpha = data[index + 3] / 255;
+            if (alpha < 0.2) continue;
+            sum += ((0.2126 * data[index] + 0.7152 * data[index + 1] + 0.0722 * data[index + 2]) / 255) * alpha;
+            weight += alpha;
+          }
+          light = weight > 8 && sum / weight > 0.86;
+        }
+      } catch {
+        // A cross-origin image taints the canvas; assume it is fine on white.
+      }
+      if (lightness.size >= MAX_LIGHTNESS_ENTRIES) lightness.clear();
+      lightness.set(source, light);
+      resolve(light);
+    };
+    image.onerror = () => resolve(false);
+    image.src = source;
+  });
+}
+
 export function Favicon({
   bookmark,
   size = 16,
@@ -94,6 +143,18 @@ export function Favicon({
     () => embedded ?? (key ? (peekAsset(key) ?? null) : null),
   );
   const [failed, setFailed] = useState(false);
+  const [light, setLight] = useState(() => (source ? (lightness.get(source) ?? false) : false));
+
+  useEffect(() => {
+    if (!source) return;
+    let cancelled = false;
+    void measureLightness(source).then((value) => {
+      if (!cancelled) setLight(value);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [source]);
 
   useEffect(() => {
     if (embedded) {
@@ -162,7 +223,7 @@ export function Favicon({
        * tile rather than as a bright square, and a pixel of padding so the mark is not
        * flush against its own edge.
        */
-      className={cn("bs-favicon", className)}
+      className={cn("bs-favicon", light && "is-light", className)}
       style={{ width: size, height: size }}
       onError={() => setFailed(true)}
     />
@@ -306,7 +367,7 @@ export function PlatePreview({ bookmark, className }: { bookmark: Bookmark; clas
         </>
       ) : bookmark.domain ? (
         <>
-          <Favicon bookmark={bookmark} size={26} />
+          <Favicon bookmark={bookmark} size={32} className="bs-plate-icon" />
           <span className="bs-plate-domain">
             {bookmark.domain}
           </span>

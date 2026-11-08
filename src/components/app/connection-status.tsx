@@ -34,7 +34,12 @@ export function ConnectionStatus({
         </button>
       ) : null}
       <Hint label="How this app reaches the web — Settings → Connections" side="top">
-        <button type="button" className={cn("bs-conn", `is-${tone}`)} onClick={onOpen}>
+        <button
+          type="button"
+          className={cn("bs-conn", `is-${tone}`)}
+          onClick={onOpen}
+          aria-label={`${busy ? `Filling in ${busy.toLocaleString()} items` : label}. Open connection settings.`}
+        >
           <span className="bs-conn-dot" aria-hidden />
           {busy ? <Spinner size={14} className="animate-spin" /> : icon}
           <span className="bs-conn-label">{busy ? `Filling in ${busy.toLocaleString()}…` : label}</span>
@@ -54,6 +59,11 @@ function describe(runtime: RuntimeState): { label: string; icon: React.ReactNode
       return { label: "Local server connected", icon: <Server size={14} />, tone: "on" };
     default:
       if (runtime.extensionNeedsApproval) return { label: "Extension found · not allowed yet", icon: <Plug size={14} />, tone: "off" };
-      return { label: "Offline · connect for previews", icon: <Plug size={14} />, tone: "off" };
+      // Not "Offline": the network is fine, the page just has nothing to fetch previews with.
+      return {
+        label: typeof navigator !== "undefined" && !navigator.onLine ? "No network · library still works" : "Add the extension for previews",
+        icon: <Plug size={14} />,
+        tone: "off",
+      };
   }
 }

@@ -78,7 +78,10 @@ function CardBase({ bookmark, selected, selecting, chrome }: ItemProps) {
         <div
           role="button"
           tabIndex={0}
-          aria-selected={selected}
+          // A short, explicit name instead of every line of the card read aloud, with the
+          // selection state in it (aria-selected is not valid on a button).
+          aria-label={[bookmark.title, bookmark.domain, selected ? "selected" : ""].filter(Boolean).join(", ")}
+          data-selected={selected || undefined}
           onClick={(event) => {
             // Modifier-clicks are selection gestures, not navigation — the same contract
             // as a file manager, which is where people's expectations come from.
@@ -230,7 +233,10 @@ function RowBase({ bookmark, selected, selecting, chrome }: ItemProps) {
         <div
           role="button"
           tabIndex={0}
-          aria-selected={selected}
+          // A short, explicit name instead of every line of the card read aloud, with the
+          // selection state in it (aria-selected is not valid on a button).
+          aria-label={[bookmark.title, bookmark.domain, selected ? "selected" : ""].filter(Boolean).join(", ")}
+          data-selected={selected || undefined}
           onClick={(event) => {
             if (event.metaKey || event.ctrlKey || event.shiftKey) {
               event.preventDefault();
@@ -284,12 +290,16 @@ function RowBase({ bookmark, selected, selecting, chrome }: ItemProps) {
             </span>
           </div>
 
-          {folder ? (
-            <span className="bs-row-folder">
-              <FolderIcon size={13} />
-              {folder}
-            </span>
-          ) : null}
+          {/* Always rendered, so the column lines up whether or not a row is filed. The
+              leaf folder is shown; the full path is in the tooltip. */}
+          <span className="bs-row-folder" title={folder || undefined}>
+            {folder ? (
+              <>
+                <FolderIcon size={13} aria-hidden="true" />
+                <span className="bs-row-folder-name">{folder.split(" / ").pop()}</span>
+              </>
+            ) : null}
+          </span>
 
           <span className="hidden w-24 shrink-0 justify-end gap-1 md:flex">
             <HealthChip bookmark={bookmark} />

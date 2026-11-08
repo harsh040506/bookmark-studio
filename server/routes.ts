@@ -46,6 +46,7 @@ import {
   capture,
   clearCache,
   findChrome,
+  gateState,
   pruneCache,
   readCached,
 } from "./screenshot";
@@ -990,7 +991,8 @@ api.post("/screenshot/batch", renderLimiter, async (req, res) => {
 });
 
 api.get("/screenshot/cache", async (_req, res) => {
-  res.json({ ...(await cacheStats()), available: Boolean(findChrome()) });
+  // `pool` reports open tabs (never above five), queued captures and browser restarts.
+  res.json({ ...(await cacheStats()), available: Boolean(findChrome()), pool: gateState() });
 });
 
 api.delete("/screenshot/cache", async (_req, res) => {

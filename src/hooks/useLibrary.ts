@@ -57,7 +57,7 @@ import {
   startSync as startChromeSync,
   updateBookmarkNode,
 } from "../lib/chrome-bookmarks";
-import { classify, suggestTags } from "../lib/classify";
+import { classify, isTopicTag, suggestTags, topicsIn } from "../lib/classify";
 import * as db from "../lib/db";
 import { buildLibraryIndex, countFacets, type LibraryIndex } from "../lib/engine";
 import { Vocabulary } from "../lib/fuzzy";
@@ -67,6 +67,7 @@ import {
   folderSubtree,
   planDuplicateCleanup,
   toIndexDoc,
+  retagDerived,
 } from "../lib/library";
 import { serializeNetscapeBookmarks } from "../lib/netscape";
 import {
@@ -89,7 +90,7 @@ import {
 } from "../lib/sources";
 import { announceCommit, announceReplace, subscribeSync } from "../lib/sync";
 import { TfIdfIndex } from "../lib/tfidf";
-import { canonicalUrl, extractSummary, getDomain, tokenizeForDisplay } from "../lib/text";
+import { canonicalUrl, extractSummary, getDomain } from "../lib/text";
 import { chunk, downloadFile, newId } from "../lib/utils";
 import { groupLookalikes, indexImage } from "../lib/visual";
 import { isVideoUrl, thumbnailUrl } from "../lib/embeds";
@@ -184,6 +185,8 @@ const UNDO_LIMIT = 40;
  * remainder follows immediately; this is a head start, not a page size.
  */
 const FIRST_PAINT_ROWS = 240;
+/** Meta key recording that old word tags have been replaced with topic tags. */
+const TOPIC_TAGS_MIGRATION = "migration:topic-tags";
 
 /**
  * Batch sizes for user-initiated jobs.
@@ -538,7 +541,19 @@ export function useLibrary() {
       const rest = await db.loadRest(new Set(first.map((row) => row.id)));
       if (!active) return;
       pin(rest);
-      const all = [...first, ...rest];
+      let all = [...first, ...rest];
+
+      // One-time clean-up of word tags written by earlier versions (see `retagDerived`).
+      if (!(await db.getMeta<boolean>(TOPIC_TAGS_MIGRATION))) {
+        const retagged = retagDerived(all, buildFolderPaths(shell.folders), suggestTags, isTopicTag);
+        if (retagged.length) {
+          await db.putBookmarks(retagged);
+          const byId = new Map(retagged.map((row) => [row.id, row]));
+          all = all.map((row) => byId.get(row.id) ?? row);
+        }
+        await db.setMeta(TOPIC_TAGS_MIGRATION, true);
+        if (!active) return;
+      }
       setBookmarks(all);
       bookmarksRef.current = all;
       setLoading(false);
@@ -2223,12 +2238,16 @@ export function useLibrary() {
       handWritten && bookmark.description ? bookmark.description : scraped || bookmark.description;
     const summary = metadata.text ? extractSummary(metadata.text, 320) : bookmark.summary;
 
+    // Only recognisable topics, never loose words from the page: a heading like "Everything
+    // you need" must not become the tags `everything` and `need`.
+    const pageTopics = new Map<string, number>();
+    for (const keyword of metadata.keywords) topicsIn(keyword, pageTopics, 2);
+    topicsIn(metadata.title ?? "", pageTopics, 2);
+    for (const heading of (metadata.headings ?? []).slice(0, 3)) topicsIn(heading, pageTopics, 1);
     const scrapedTags = [
-      ...metadata.keywords.flatMap((keyword) => tokenizeForDisplay(keyword)),
-      ...tokenizeForDisplay(metadata.title ?? ""),
-      ...(metadata.headings ?? []).slice(0, 3).flatMap((heading) => tokenizeForDisplay(heading)),
+      ...[...pageTopics.entries()].sort((a, b) => b[1] - a[1]).map(([tag]) => tag),
       ...(metadata.tech ?? []).map((entry) => entry.toLowerCase()),
-    ].slice(0, 6);
+    ].slice(0, 4);
 
     // Scraped tags are additive; a tag the user removed is not re-added, because their
     // edit is the more recent statement of intent.

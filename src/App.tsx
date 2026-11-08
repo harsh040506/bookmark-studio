@@ -472,6 +472,8 @@ export default function App() {
     setImportOpen(true);
   }, []);
 
+  const sampleBatch = library.imports.find((batch) => batch.name === "Sample library" && batch.liveCount > 0);
+
   /** The sample library goes through the real import pipeline, as its own removable batch. */
   const loadSample = useCallback(async () => {
     const source = SOURCE_BY_ID.get("html") ?? SOURCE_BY_ID.get("chrome");
@@ -1327,6 +1329,7 @@ export default function App() {
         initialFile={importFile}
         keepDuplicatesDefault={settings.keepDuplicatesOnImport}
         onBackup={() => library.exportLibrary(undefined, "json")}
+        onRemoveSample={sampleBatch ? () => library.deleteImport(sampleBatch.id) : undefined}
         onPreview={library.previewImport}
         onImport={library.importFile}
       />

@@ -8,7 +8,7 @@
  *
  * No model is involved. Rules are data, so they are easy to extend.
  */
-import { getDomain, normalize, titleCase, tokenizeForDisplay } from "./text";
+import { getDomain, normalize, titleCase } from "./text";
 
 export interface CategoryRule {
   category: string;
@@ -278,24 +278,116 @@ export function categoryFromFolder(folderPath: string): string | null {
 }
 
 /**
- * Suggests tags without a model: the strongest terms from the title, the folder
- * name the user picked, and the site's own brand name.
+ * The topics a tag may be suggested for.
+ *
+ * Tags used to be the strongest *words* of the title and folder, which on a real library
+ * produced tags like `else`, `everything` and `stuff` from a folder called "Everything
+ * Else & Stuff", and thousands of one-off words across a 1,300-bookmark import that made
+ * the Tags list useless. A suggested tag now has to name a recognisable topic: each entry
+ * is the tag, then the whole words or phrases that imply it.
  */
-export function suggestTags(input: ClassifyInput, limit = 4): string[] {
-  const counts = new Map<string, number>();
-  const bump = (term: string, by: number) => {
-    if (term.length < 3) return;
-    counts.set(term, (counts.get(term) ?? 0) + by);
-  };
+export const TOPIC_TAGS: ReadonlyArray<readonly [tag: string, phrases: readonly string[]]> = [
+  ["ai", ["ai", "artificial intelligence", "llm", "llms", "gpt", "chatgpt", "claude", "gemini", "openai", "anthropic", "generative", "genai"]],
+  ["agents", ["agent", "agents", "agentic", "mcp", "model context protocol"]],
+  ["machine-learning", ["machine learning", "deep learning", "neural network", "neural networks", "pytorch", "tensorflow", "huggingface", "hugging face"]],
+  ["prompting", ["prompt", "prompts", "prompt engineering"]],
+  ["design", ["design", "designer", "designers", "ui", "ux", "ui/ux"]],
+  ["inspiration", ["inspiration", "showcase", "moodboard", "gallery"]],
+  ["typography", ["font", "fonts", "typeface", "typefaces", "typography"]],
+  ["colour", ["color", "colour", "colors", "colours", "palette", "palettes", "gradient", "gradients"]],
+  ["icons", ["icon", "icons", "illustration", "illustrations", "mockup", "mockups"]],
+  ["animation", ["animation", "animations", "motion", "lottie"]],
+  ["3d", ["3d", "three.js", "threejs", "webgl", "blender", "spline"]],
+  ["figma", ["figma"]],
+  ["framer", ["framer"]],
+  ["frontend", ["frontend", "front-end", "css", "html", "tailwind", "web development", "webdev"]],
+  ["react", ["react", "nextjs", "next.js"]],
+  ["javascript", ["javascript", "typescript", "nodejs", "node.js", "npm"]],
+  ["python", ["python", "django", "flask", "pandas", "jupyter", "numpy"]],
+  ["components", ["component", "components", "ui kit", "ui kits", "design system", "design systems"]],
+  ["developer-tools", ["devtools", "developer tools", "cli", "api", "apis", "sdk"]],
+  ["open-source", ["github", "open source", "open-source", "repository"]],
+  ["automation", ["automation", "automate", "workflow", "workflows", "zapier", "n8n", "scraping"]],
+  ["no-code", ["no code", "no-code", "nocode", "low code", "low-code", "webflow", "bubble"]],
+  ["data", ["dataset", "datasets", "analytics", "visualization", "visualisation", "sql", "database"]],
+  ["research", ["research", "paper", "papers", "arxiv", "preprint"]],
+  ["learning", ["course", "courses", "tutorial", "tutorials", "learn", "learning", "education", "lesson", "lessons"]],
+  ["video", ["video", "videos", "youtube"]],
+  ["audio", ["audio", "music", "podcast", "podcasts", "voice", "speech"]],
+  ["images", ["image", "images", "photo", "photos", "photography"]],
+  ["writing", ["writing", "blog", "blogs", "newsletter", "essay", "essays"]],
+  ["marketing", ["marketing", "seo", "influencer", "branding", "advertising"]],
+  ["social-media", ["social media", "instagram", "linkedin", "twitter", "tiktok"]],
+  ["startups", ["startup", "startups", "founder", "founders", "y combinator"]],
+  ["investing", ["venture capital", "vc", "investor", "investors", "angel investors", "investment", "investing"]],
+  ["finance", ["finance", "financial", "banking", "accounting", "valuation", "stocks"]],
+  ["legal", ["legal", "law", "lawyer", "lawyers"]],
+  ["productivity", ["productivity", "notion", "todo"]],
+  ["security", ["security", "privacy", "encryption", "passwords"]],
+  ["career", ["career", "careers", "jobs", "resume", "hiring"]],
+  ["ocr", ["ocr", "optical character recognition"]],
+];
 
-  for (const term of tokenizeForDisplay(input.title)) bump(term, 2);
-  for (const term of tokenizeForDisplay(input.description ?? "")) bump(term, 1);
-  // Only the deepest folder — parents are usually generic ("Bookmarks bar").
+const TOPIC_TAG_NAMES = new Set(TOPIC_TAGS.map(([tag]) => tag));
+
+/** Whether `tag` is one of the topic tags this module suggests. */
+export function isTopicTag(tag: string): boolean {
+  return TOPIC_TAG_NAMES.has(tag.toLowerCase());
+}
+
+/** Phrase -> tag, longest phrases first so "machine learning" beats "learning". */
+const TOPIC_PHRASES: { words: string[]; tag: string }[] = TOPIC_TAGS.flatMap(([tag, phrases]) =>
+  phrases.map((phrase) => ({ words: phrase.split(" "), tag })),
+).sort((a, b) => b.words.length - a.words.length);
+
+/** Lower-cased words, keeping the characters topic names use (`ui/ux`, `next.js`). */
+function topicWords(value: string): string[] {
+  return normalize(value)
+    .replace(/[^a-z0-9+#./-]+/g, " ")
+    .split(/\s+/)
+    .map((word) => word.replace(/^[./-]+|[./-]+$/g, ""))
+    .filter(Boolean);
+}
+
+/** Adds the topic tags `value` mentions to `into`, each weighted by `weight` per mention. */
+export function topicsIn(value: string, into = new Map<string, number>(), weight = 1): Map<string, number> {
+  const words = topicWords(value);
+  if (!words.length) return into;
+  const used = new Array<boolean>(words.length).fill(false);
+  for (const { words: phrase, tag } of TOPIC_PHRASES) {
+    for (let index = 0; index + phrase.length <= words.length; index += 1) {
+      let match = true;
+      for (let offset = 0; offset < phrase.length; offset += 1) {
+        if (used[index + offset] || words[index + offset] !== phrase[offset]) {
+          match = false;
+          break;
+        }
+      }
+      if (!match) continue;
+      for (let offset = 0; offset < phrase.length; offset += 1) used[index + offset] = true;
+      into.set(tag, (into.get(tag) ?? 0) + weight);
+    }
+  }
+  return into;
+}
+
+/**
+ * Suggests tags without a model: the recognisable topics named in the title, the
+ * deepest folder the user picked, and the description.
+ *
+ * Returns nothing rather than noise when no topic is named: an untagged bookmark is
+ * still found by its folder, title and site, while a meaningless tag clutters every list.
+ */
+export function suggestTags(input: ClassifyInput, limit = 3): string[] {
+  const scores = new Map<string, number>();
+  topicsIn(input.title, scores, 2);
+  topicsIn(input.description ?? "", scores, 1);
+  // Only the deepest folder; parents are usually generic ("Bookmarks bar").
   const leaf = (input.folderPath ?? "").split("/").pop() ?? "";
-  for (const term of tokenizeForDisplay(leaf)) bump(term, 4);
+  topicsIn(leaf, scores, 3);
 
-  return [...counts.entries()]
+  return [...scores.entries()]
     .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
     .slice(0, limit)
-    .map(([term]) => term);
+    .map(([tag]) => tag);
 }

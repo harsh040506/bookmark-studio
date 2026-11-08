@@ -167,7 +167,8 @@ All optional.
 | `ALLOWED_HOSTS` | loopback only | Extra host names the API answers to (comma-separated), for a self-hosted domain or LAN address |
 | `CHROME_PATH` | auto-detected | Chrome, Edge or Chromium for screenshots |
 | `SCREENSHOT_CACHE_DIR` | `.cache/screenshots` | Where rendered previews are cached |
-| `SCREENSHOT_CONCURRENCY` | `3` | Simultaneous headless tabs |
+| `SCREENSHOT_CONCURRENCY` | `3` | Pages loaded at once in the single headless browser (1–5; never more than 5) |
+| `SCREENSHOT_RECYCLE_AFTER` | `150` | Captures before the headless browser is closed and restarted, to keep memory flat on long runs |
 | `SCREENSHOT_CACHE_MAX_BYTES` | `536870912` (512 MB) | Disk ceiling for the preview cache |
 | `NO_OPEN` | unset | Set to `1` to stop `npm start` opening a browser |
 

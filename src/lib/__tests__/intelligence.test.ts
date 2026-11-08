@@ -72,6 +72,31 @@ describe("suggestTags", () => {
     });
     expect(tags).toContain("typography");
   });
+
+  it("never turns ordinary words of a folder name into tags", () => {
+    expect(
+      suggestTags({ url: "https://example.com/", title: "Home", folderPath: "Bookmarks bar / Everything Else & Stuff" }),
+    ).toEqual([]);
+  });
+
+  it("matches whole topics, not fragments", () => {
+    const tags = suggestTags({
+      url: "https://example.com/",
+      title: "Paint the town",
+      folderPath: "Bookmarks bar / Venture Capital Firms & Angel Investors",
+    });
+    expect(tags).toEqual(["investing"]);
+    // "ai" is a topic, but not inside "Paint" or "Daily".
+    expect(suggestTags({ url: "https://x.dev/", title: "Daily paint log" })).toEqual([]);
+  });
+
+  it("caps suggestions at three", () => {
+    const tags = suggestTags({
+      url: "https://x.dev/",
+      title: "AI design typography colour palette animation python course",
+    });
+    expect(tags.length).toBe(3);
+  });
 });
 
 describe("parseQuery", () => {
@@ -176,4 +201,4 @@ describe("extractSummary", () => {
     expect(extractSummary("Short.", 100)).toBe("Short.");
   });
 });
-
+

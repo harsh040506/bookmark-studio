@@ -118,6 +118,7 @@ function freshBookmark(
 ): Bookmark {
   const url = node.url ?? "";
   const title = node.title?.trim() || getDomain(url) || url;
+  const derivedTags = suggestTags({ url, title, folderPath });
   return {
     id: node.id,
     url,
@@ -125,7 +126,8 @@ function freshBookmark(
     domain: getDomain(url),
     description: "",
     category: classify({ url, title, folderPath }),
-    tags: suggestTags({ url, title, folderPath }),
+    tags: derivedTags,
+    derivedTags: derivedTags.length ? derivedTags : undefined,
     folderId,
     boardIds: [],
     addedAt: node.dateAdded ?? Date.now(),

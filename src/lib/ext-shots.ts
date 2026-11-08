@@ -33,6 +33,35 @@ interface Pending {
 
 const ready = new Map<string, Pending>();
 
+/** Staged shots nobody has claimed are dropped after their TTL, so a long sweep can't hoard blobs. */
+function pruneReady(now = Date.now()): void {
+  for (const [key, entry] of ready) if (now - entry.at > PENDING_TTL_MS) ready.delete(key);
+}
+
+/**
+ * Captures this page has in flight at once, matching the extension's own limit of five.
+ *
+ * The extension enforces the real cap across every tab. This one keeps a single tab from
+ * queueing dozens of requests behind it: a request waiting in the extension's queue still
+ * runs down this page's timeout, which made the page give up and retry captures that were
+ * merely waiting their turn, piling more work onto the queue.
+ */
+const MAX_IN_FLIGHT = 5;
+let inFlight = 0;
+const queued: (() => void)[] = [];
+
+async function withCaptureSlot<T>(work: () => Promise<T>): Promise<T> {
+  if (inFlight < MAX_IN_FLIGHT && !queued.length) inFlight += 1;
+  else await new Promise<void>((resolve) => queued.push(resolve));
+  try {
+    return await work();
+  } finally {
+    const next = queued.shift();
+    if (next) next();
+    else inFlight -= 1;
+  }
+}
+
 function shotKey(url: string, device: DeviceName): string {
   return `shot:${device}:${url}`;
 }
@@ -105,12 +134,13 @@ export async function captureAndStage(
   device: DeviceName,
 ): Promise<{ ok: boolean; capturedAt?: number; error?: string }> {
   const key = shotKey(url, device);
-  const result = await sendCaptureRequest(url, device);
+  const result = await withCaptureSlot(() => sendCaptureRequest(url, device));
   if (!result.ok || !result.dataUrl) {
     return { ok: false, error: result.error };
   }
   const blob = await dataUrlToBlob(result.dataUrl);
   const capturedAt = result.capturedAt ?? Date.now();
+  pruneReady();
   ready.set(key, { blob, capturedAt, at: Date.now() });
   return { ok: true, capturedAt };
 }

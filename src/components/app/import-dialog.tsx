@@ -85,6 +85,8 @@ export interface ImportDialogProps {
   keepDuplicatesDefault: boolean;
   /** Downloads a full backup, offered before a replace. */
   onBackup?: () => void;
+  /** Set when the sample library is loaded; the import then offers to remove it first. */
+  onRemoveSample?: () => Promise<void>;
   onPreview: (options: {
     file: File;
     source: SourceDefinition;
@@ -115,6 +117,7 @@ export function ImportDialog(props: ImportDialogProps) {
   const [mode, setMode] = useState<"merge" | "replace">("merge");
   const [keepDuplicates, setKeepDuplicates] = useState(props.keepDuplicatesDefault);
   const [label, setLabel] = useState("");
+  const [dropSample, setDropSample] = useState(true);
   const [preview, setPreview] = useState<ImportOutcome | null>(null);
   const [busy, setBusy] = useState(false);
   const [reading, setReading] = useState(false);
@@ -132,6 +135,7 @@ export function ImportDialog(props: ImportDialogProps) {
     setHeaders([]);
     setPreview(null);
     setLabel("");
+    setDropSample(true);
     setSourceFilter("");
     setBusy(false);
     setReading(false);
@@ -226,18 +230,34 @@ export function ImportDialog(props: ImportDialogProps) {
             entry.name.toLowerCase().includes(needle) || entry.hint.toLowerCase().includes(needle),
         )
       : SOURCES;
-    return SOURCE_GROUPS.map((group) => ({
-      group,
-      sources: matching.filter((entry) => entry.group === group),
-    })).filter((entry) => entry.sources.length);
-  }, [sourceFilter]);
+    /*
+      The sources this file could have come from go first, in their own group, so the
+      choice that matters is on screen without scrolling past 28 others. They are left out
+      of the groups below so nothing appears twice.
+    */
+    const suggestedIds = needle ? [] : candidates.filter((entry) => entry.confidence > 0).map((entry) => entry.id);
+    const suggested = suggestedIds
+      .map((id) => SOURCE_BY_ID.get(id))
+      .filter((entry): entry is SourceDefinition => Boolean(entry));
+    const rest = matching.filter((entry) => !suggestedIds.includes(entry.id));
+    return [
+      ...(suggested.length ? [{ group: "Matches this file", sources: suggested }] : []),
+      ...SOURCE_GROUPS.map((group) => ({
+        group,
+        sources: rest.filter((entry) => entry.group === group),
+      })),
+    ].filter((entry) => entry.sources.length);
+  }, [sourceFilter, candidates]);
 
+  const bestId = candidates[0]?.id;
   const confidenceFor = (id: string) => candidates.find((entry) => entry.id === id)?.confidence ?? 0;
 
   const runImport = async () => {
     if (!file || !source) return;
     setBusy(true);
     try {
+      // A replace clears the sample anyway; a merge removes it only when asked.
+      if (mode === "merge" && dropSample && props.onRemoveSample) await props.onRemoveSample();
       await props.onImport({
         file,
         source,
@@ -330,10 +350,10 @@ export function ImportDialog(props: ImportDialogProps) {
               />
             </div>
 
-            <div className="file-list">
+            <div className="file-list bs-scroll-fade" role="radiogroup" aria-label="Where this file came from">
               {grouped.map((entry) => (
-                <div key={entry.group} className="mb-2">
-                  <p className="menu-header">{entry.group}</p>
+                <div key={entry.group} className="mb-2" role="group" aria-label={entry.group}>
+                  <p className="menu-header" aria-hidden="true">{entry.group}</p>
                   <div className="grid gap-1 sm:grid-cols-2">
                     {entry.sources.map((candidate) => {
                       const active = source?.id === candidate.id;
@@ -342,6 +362,8 @@ export function ImportDialog(props: ImportDialogProps) {
                         <button
                           key={candidate.id}
                           type="button"
+                          role="radio"
+                          aria-checked={active}
                           onClick={() => {
                             setSource(candidate);
                             if (candidate.parsers.includes("csv") && text) {
@@ -350,20 +372,20 @@ export function ImportDialog(props: ImportDialogProps) {
                               setColumns(guessColumns(found, candidate.csv));
                             }
                           }}
+                          onDoubleClick={() => {
+                            setSource(candidate);
+                            if (!candidate.parsers.includes("csv")) void runPreview();
+                          }}
                           className={cn("bs-source", active && "is-on")}
                         >
-                          <span className="flex w-full items-center gap-1.5">
+                          <span className="bs-source-top">
                             <span className="bs-source-name">{candidate.name}</span>
                             {confidence >= 0.8 ? (
-                              <Badge variant="success" className="ml-auto">
-                                Detected
-                              </Badge>
-                            ) : confidence > 0 ? (
-                              <Badge variant="outline" className="ml-auto">
-                                Possible
-                              </Badge>
+                              <Badge variant="success">Detected</Badge>
+                            ) : candidate.id === bestId && confidence > 0 ? (
+                              <Badge variant="secondary">Best match</Badge>
                             ) : null}
-                            {active ? <Check size={16} className="bs-source-check" /> : null}
+                            {active ? <Check size={16} className="bs-source-check" aria-hidden="true" /> : null}
                           </span>
                           <span className="bs-source-hint line-clamp-2">
                             {candidate.hint}
@@ -374,7 +396,12 @@ export function ImportDialog(props: ImportDialogProps) {
                   </div>
                 </div>
               ))}
+              {!grouped.length ? <p className="file-empty">No source matches “{sourceFilter}”.</p> : null}
             </div>
+            <p className="field-hint">
+              Files from Chromium browsers look identical, so the best match is a guess. Pick the
+              browser it really came from to keep each source’s count right.
+            </p>
           </div>
         ) : null}
 
@@ -494,6 +521,18 @@ export function ImportDialog(props: ImportDialogProps) {
                     </span>
                   </span>
                 </label>
+
+                {props.onRemoveSample && mode === "merge" ? (
+                  <label className="bs-check-row">
+                    <Checkbox checked={dropSample} onCheckedChange={(checked) => setDropSample(checked === true)} />
+                    <span className="flex flex-col">
+                      <span className="form-row-label">Remove the sample library</span>
+                      <span className="form-row-hint bs-hint-wide">
+                        So its demo folders and links don’t mix with yours.
+                      </span>
+                    </span>
+                  </label>
+                ) : null}
 
                 <label className="bs-check-row">
                   <Checkbox

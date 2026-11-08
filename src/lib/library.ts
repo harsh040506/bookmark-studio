@@ -302,3 +302,40 @@ export function formatRelative(timestamp?: number): string {
   if (months < 12) return `${months}mo ago`;
   return `${Math.floor(months / 12)}y ago`;
 }
+
+/**
+ * Replaces automatically added tags made by the old word-splitting rule.
+ *
+ * Earlier versions tagged an import with the loose words of its title and folder, so a
+ * folder called "Everything Else & Stuff" put `everything`, `else` and `stuff` on every
+ * bookmark inside it. This keeps every tag the person added themselves, keeps derived tags
+ * that name a real topic, and re-suggests from the topic vocabulary. Returns only the rows
+ * that changed, so a library that is already clean costs one pass and no writes.
+ */
+export function retagDerived(
+  bookmarks: Bookmark[],
+  folderPaths: Map<string, string>,
+  suggest: (input: { url: string; title: string; folderPath: string; description?: string }) => string[],
+  isTopic: (tag: string) => boolean,
+): Bookmark[] {
+  const changed: Bookmark[] = [];
+  for (const bookmark of bookmarks) {
+    const derived = bookmark.derivedTags;
+    if (!derived?.length || !bookmark.url) continue;
+    const own = bookmark.tags.filter((tag) => !derived.includes(tag));
+    const kept = derived.filter((tag) => isTopic(tag) && bookmark.tags.includes(tag));
+    const fresh = suggest({
+      url: bookmark.url,
+      title: bookmark.title,
+      folderPath: pathOf(bookmark, folderPaths),
+      description: bookmark.description,
+    }).filter((tag) => !own.includes(tag));
+    const nextDerived = [...new Set([...kept, ...fresh])].slice(0, 4);
+    const nextTags = [...own, ...nextDerived].slice(0, 24);
+    const same =
+      nextTags.length === bookmark.tags.length && nextTags.every((tag, index) => tag === bookmark.tags[index]);
+    if (same) continue;
+    changed.push({ ...bookmark, tags: nextTags, derivedTags: nextDerived.length ? nextDerived : undefined });
+  }
+  return changed;
+}

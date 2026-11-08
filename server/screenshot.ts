@@ -7,8 +7,10 @@
  * the majority of the web, exactly as the requirements anticipated.
  *
  * Design notes:
- *  - One browser instance is reused; pages are the unit of concurrency, capped so a
- *    1200-bookmark sweep cannot spawn 1200 tabs.
+ *  - At most one browser process runs, with at most five tabs open in it (`tab-pool.ts`).
+ *    A tab's slot is only freed once the tab has actually closed, and a browser is fully
+ *    shut down before another one starts, so a 5,000-bookmark sweep cannot pile up tabs
+ *    or processes.
  *  - Results are cached on disk by (url, viewport) and served straight from there.
  *  - Requests inside the page are filtered so a render cannot reach private addresses.
  */
@@ -21,7 +23,7 @@ import os from "node:os";
 import path from "node:path";
 import puppeteer, { type Browser, type Page } from "puppeteer-core";
 import { intFromEnv } from "./config";
-import { createGate } from "./gate";
+import { ABSOLUTE_MAX_TABS, createTabPool, TabPoolTimeout } from "./tab-pool";
 import { assertPublicUrl, isPrivateAddress } from "./safe-fetch";
 
 export type DeviceName = "desktop" | "tablet" | "mobile";
@@ -34,14 +36,20 @@ export const DEVICES: Record<DeviceName, { width: number; height: number; scale:
 
 const CACHE_DIR = path.resolve(process.env.SCREENSHOT_CACHE_DIR ?? ".cache/screenshots");
 /**
- * Tabs open at once.
+ * Tabs open at once, never more than five.
  *
- * Bounded at both ends by `intFromEnv`: a zero or a `NaN` here does not misbehave, it
- * deadlocks — `active < max` is false for both, so the gate admits nobody and every
- * capture waits forever. The upper bound is a guess at where a machine starts thrashing
- * rather than a hard limit, but an unbounded value is certainly wrong.
+ * Bounded at both ends by `intFromEnv`: a zero or a `NaN` here would deadlock the pool,
+ * and anything above five breaks the promise that no more than five pages are being
+ * loaded at the same moment. The pool clamps again as a second line of defence.
  */
-const MAX_CONCURRENCY = intFromEnv("SCREENSHOT_CONCURRENCY", 3, { min: 1, max: 32 });
+const MAX_CONCURRENCY = intFromEnv("SCREENSHOT_CONCURRENCY", 3, { min: 1, max: ABSOLUTE_MAX_TABS });
+/**
+ * Captures one browser process serves before it is drained and restarted.
+ *
+ * Chrome's memory grows over hundreds of page loads even with every tab closed. Restarting
+ * after a few hundred keeps a whole-library sweep at a steady footprint.
+ */
+const RECYCLE_AFTER = intFromEnv("SCREENSHOT_RECYCLE_AFTER", 150, { min: 1, max: 10_000 });
 const NAVIGATION_TIMEOUT = 20_000;
 /**
  * Hard ceiling on one capture, start to finish.
@@ -80,121 +88,12 @@ export function findChrome(): string | null {
   return null;
 }
 
-let browserPromise: Promise<Browser> | null = null;
-
-/**
- * Starts Chrome, or returns the instance already running.
- *
- * ## Why the assignment happens before the first `await`
- *
- * Captures arrive concurrently — the gate allows three at once, and a batch dispatches
- * twenty-five together — so this function is routinely entered by several callers in the
- * same tick. The version this replaces checked `browserPromise`, then `await`ed, then
- * assigned; every caller that arrived during that await saw `null`, and each launched its
- * own Chrome. The last assignment won, and the earlier browsers became orphaned processes
- * that no longer had a reference anywhere in the program — so `shutdown()` could not close
- * them, and they outlived the server exactly as the shutdown handler exists to prevent.
- *
- * Publishing the promise synchronously, before anything is awaited, is what makes this
- * safe: the second caller finds the first caller's in-flight launch and waits on it.
- */
-function launchBrowser(executablePath: string): Promise<Browser> {
-  const launching = puppeteer
-    .launch({
-      executablePath,
-      headless: true,
-      args: [
-        "--no-sandbox",
-        "--disable-dev-shm-usage",
-        "--disable-gpu",
-        "--hide-scrollbars",
-        "--mute-audio",
-        "--no-first-run",
-        "--disable-background-networking",
-      ],
-    })
-    .then((browser) => {
-      browser.on("disconnected", () => {
-        // Only retract the handle if it is still this browser's. A slower disconnect event
-        // from a previous instance must not clear a newer, healthy one.
-        if (browserPromise === launching) browserPromise = null;
-      });
-      return browser;
-    });
-
-  // Assigned before the caller awaits, so a concurrent caller joins rather than launches.
-  browserPromise = launching;
-
-  /*
-    A failed launch must not be remembered as a rejected promise.
-
-    Leaving it in place would make every later capture reject with the original error —
-    Chrome briefly unavailable at start-up would disable screenshots for the life of the
-    process. The handler is attached without being awaited so the rejection is observed
-    here too, which is what keeps a launch failure from surfacing as an unhandled
-    rejection when the only caller has already given up and moved on.
-  */
-  launching.catch(() => {
-    if (browserPromise === launching) browserPromise = null;
-  });
-
-  return launching;
-}
-
-/**
- * How many times to re-look before giving up.
- *
- * Each pass either returns a browser or discovers that the handle changed underneath it.
- * Three is enough for any realistic interleaving and bounds the loop against a browser
- * that dies the instant it starts, which would otherwise spin here indefinitely.
- */
-const BROWSER_ATTEMPTS = 3;
-
-async function getBrowser(): Promise<Browser> {
-  for (let attempt = 0; attempt < BROWSER_ATTEMPTS; attempt += 1) {
-    const pending = browserPromise;
-
-    if (!pending) {
-      const executablePath = findChrome();
-      if (!executablePath) throw new ScreenshotUnavailable("No Chrome or Edge installation found");
-      /*
-        No `await` separates the null check above from the publish inside `launchBrowser`,
-        so this whole branch is one synchronous block and exactly one caller can be in it.
-      */
-      return launchBrowser(executablePath);
-    }
-
-    const existing = await pending.catch(() => null);
-    if (existing?.connected) return existing;
-
-    /*
-      The browser we waited on is gone. Retract the handle only if it is still the one we
-      were holding: another caller waiting on the same dead browser may have already put a
-      replacement in place, and clearing that would strand a live Chrome with no reference
-      to it — the very leak this function was restructured to close. When the handle has
-      moved on, the next pass simply waits on whatever replaced it.
-    */
-    if (browserPromise === pending) browserPromise = null;
-  }
-
-  throw new ScreenshotUnavailable("Could not start a browser for rendering");
-}
-
 export class ScreenshotUnavailable extends Error {}
 
 /** A capture that ran past its budget. Distinct from "unavailable" so callers can retry. */
 export class ScreenshotTimeout extends Error {}
 
 const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
-
-/** Rejects if `work` has not settled within `ms`. The loser's result is discarded. */
-function withDeadline<T>(work: Promise<T>, ms: number, what: string): Promise<T> {
-  let timer: ReturnType<typeof setTimeout>;
-  const deadline = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new ScreenshotTimeout(`${what} exceeded ${ms}ms`)), ms);
-  });
-  return Promise.race([work, deadline]).finally(() => clearTimeout(timer)) as Promise<T>;
-}
 
 function cacheKey(url: string, device: DeviceName): string {
   return crypto.createHash("sha256").update(`${device}|${url}`).digest("hex").slice(0, 32);
@@ -274,11 +173,38 @@ export function resetDnsVerdicts(): void {
   dnsVerdicts.clear();
 }
 
-/** Keeps the tab count bounded under a batch sweep. */
-const gate = createGate(MAX_CONCURRENCY);
+const LAUNCH_ARGS = [
+  "--no-sandbox",
+  "--disable-dev-shm-usage",
+  "--disable-gpu",
+  "--hide-scrollbars",
+  "--mute-audio",
+  "--no-first-run",
+  "--disable-background-networking",
+  "--disable-extensions",
+];
 
-/** Current gate state, exposed for diagnostics. */
-export const gateState = gate.state;
+/** The one browser process and its tabs. See `tab-pool.ts` for the guarantees. */
+const pool = createTabPool<Browser, Page>(
+  {
+    launch: async () => {
+      const executablePath = findChrome();
+      if (!executablePath) throw new ScreenshotUnavailable("No Chrome or Edge installation found");
+      return puppeteer.launch({ executablePath, headless: true, args: LAUNCH_ARGS });
+    },
+    openTab: (browser) => browser.newPage(),
+    closeTab: (page) => page.close(),
+    closeBrowser: (browser) => browser.close(),
+    killBrowser: (browser) => {
+      browser.process()?.kill("SIGKILL");
+    },
+    isAlive: (browser) => browser.connected,
+  },
+  { maxTabs: MAX_CONCURRENCY, recycleAfter: RECYCLE_AFTER, closeGraceMs: CLOSE_GRACE },
+);
+
+/** Current pool state, exposed for diagnostics. */
+export const gateState = pool.state;
 
 export interface CaptureResult {
   file: string;
@@ -420,42 +346,14 @@ export async function capture(
   // Validates the scheme and resolves DNS, refusing private addresses.
   await assertPublicUrl(rawUrl);
 
-  await gate.acquire(options.priority);
-
-  /**
-   * One budget covers launching, opening the tab and rendering.
-   *
-   * Splitting it — a short deadline on `newPage()` and a longer one on the render — looks
-   * tidier but is wrong: opening a tab is slow precisely when other captures are already
-   * running, so the tight sub-deadline fired on healthy pages under load and reported a
-   * timeout for work that would have finished. The page handle is held in a box so
-   * cleanup can still reach it when the deadline wins.
-   */
-  const holder: { page?: Page } = {};
   try {
-    return await withDeadline(
-      (async () => {
-        const browser = await getBrowser();
-        holder.page = await browser.newPage();
-        return render(holder.page, rawUrl, device);
-      })(),
-      CAPTURE_BUDGET,
-      "Capture",
-    );
-  } finally {
-    /**
-     * Closing is never awaited here.
-     *
-     * `page.close()` can hang indefinitely on a page still holding intercepted
-     * requests, and awaiting it inside this `finally` meant `release()` never ran: three
-     * such pages permanently exhausted the gate and every later capture — including
-     * every card in the grid — hung forever with no error to show for it.
-     */
-    const doomed = holder.page;
-    if (doomed) {
-      void Promise.race([doomed.close(), delay(CLOSE_GRACE)]).catch(() => undefined);
-    }
-    gate.release();
+    return await pool.use((page) => render(page, rawUrl, device), {
+      priority: options.priority,
+      budgetMs: CAPTURE_BUDGET,
+    });
+  } catch (error) {
+    if (error instanceof TabPoolTimeout) throw new ScreenshotTimeout(error.message);
+    throw error;
   }
 }
 
@@ -553,7 +451,5 @@ export async function clearCache(): Promise<number> {
 }
 
 export async function shutdown(): Promise<void> {
-  const browser = await browserPromise?.catch(() => null);
-  await browser?.close().catch(() => undefined);
-  browserPromise = null;
+  await pool.shutdown();
 }
