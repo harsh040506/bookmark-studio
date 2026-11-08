@@ -1,0 +1,7 @@
+{
+  "//": "Pages the extension's bridge is injected into, so the website version of Bookmark Studio can use the extension for page reading, link checks, screenshots and browser-bookmark sync. Chrome match patterns. The deployed site is added at build time from the SITE_URL environment variable (the GitHub Actions workflows set it to your GitHub Pages address automatically). Add your own self-hosted address here if you run the app somewhere else.",
+  "sites": [
+    "http://localhost/*",
+    "http://127.0.0.1/*"
+  ]
+}

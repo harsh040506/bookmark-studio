@@ -1,0 +1,37 @@
+# Publishes a GitHub Release with the extension attached when a version tag (v*) is pushed.
+# The extension is built for the website set in the repository variable SITE_URL.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run check
+      - run: npm test
+      - name: Build
+        run: npm run build
+        env:
+          SITE_URL: ${{ vars.SITE_URL }}
+          REPOSITORY_URL: https://github.com/${{ github.repository }}
+          VITE_REPOSITORY_URL: https://github.com/${{ github.repository }}
+          VITE_EXTENSION_STORE_URL: ${{ vars.EXTENSION_STORE_URL }}
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/bookmark-studio-extension.zip \
+            --title "Bookmark Studio $GITHUB_REF_NAME" \
+            --generate-notes

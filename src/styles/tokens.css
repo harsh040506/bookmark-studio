@@ -1,0 +1,161 @@
+/* Design tokens: every colour, shadow, radius and easing, light and dark.
+   The three font families are open source (SIL Open Font License) and are bundled from the
+   @fontsource-variable packages (imported in src/main.tsx). Never hard-code a colour in
+   component CSS: add or reuse a token here. App-only additions live at the end of the file. */
+:root {
+  --font-sans: "DM Sans Variable", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-serif: "Newsreader Variable", ui-serif, Georgia, "Times New Roman", serif;
+  --font-mono: "JetBrains Mono Variable", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --font-ui: var(--font-sans);
+
+  /* page */
+  --paper: #faf9f5;
+  --ink: #1f1e1d;
+  --ink-2: #52514e;
+  --muted: #898781;
+  --line: rgba(11, 11, 11, 0.2);
+  --line-soft: rgba(11, 11, 11, 0.1);
+  --link: #256abf;
+  --quote-rule: #dbd9d4;
+  --code-bg: #f3f1ec;
+  --pre-bg: #f3f1ec;
+  --pre-fg: #393a34;
+  --tbl-border: #e8e5dc;
+  --tbl-head: #f5f3ed;
+  --accent: #2a78d6;
+  --accent-hover: #3987e5;
+  --accent-soft: #cde2fb;
+  --accent-text: #184f95;
+  --on-accent: #ffffff;
+  --check-edge: rgba(11, 11, 11, 0.5);
+  --mark: rgba(250, 178, 25, 0.33);
+  --selection: rgba(42, 120, 214, 0.22);
+  --chip-fg: #52514e;
+  --chip-bg: rgba(11, 11, 11, 0.05);
+  --chip-bg-hover: rgba(11, 11, 11, 0.1);
+
+  /* controls */
+  --surface-0: #f9f9f7;
+  --surface-1: #fcfcfb;
+  --surface-2: #ffffff;
+  --popover: #ffffff;
+  --ghost-hover: rgba(11, 11, 11, 0.05);
+  --ghost-selected: rgba(11, 11, 11, 0.1);
+  --border: rgba(11, 11, 11, 0.1);
+  --border-strong: rgba(11, 11, 11, 0.2);
+  --text: #0b0b0b;
+  --text-2: #52514e;
+  --text-3: #898781;
+  --danger: #d03b3b;
+  --danger-text: #8e2626;
+  --success-text: #006300;
+  --success-bg: #caeac7;
+  --warning-text: #734500;
+  --warning-bg: #f9dca4;
+  --tooltip-bg: #0b0b0b;
+  --tooltip-fg: #ffffff;
+  --shadow-sm: 0 1px 2px 0 rgba(11, 11, 11, 0.06), 0 2px 8px 0 rgba(11, 11, 11, 0.08);
+  --shadow-lg: 0 4px 8px 0 rgba(11, 11, 11, 0.08), 0 12px 28px -2px rgba(11, 11, 11, 0.08);
+  --shadow-popover: 0 8px 24px rgba(0, 0, 0, 0.12), 0 2px 6px rgba(0, 0, 0, 0.08);
+  --ring: 0 0 0 1px rgba(11, 11, 11, 0.1);
+  --focus: 0 0 0 2px var(--paper), 0 0 0 4px var(--accent);
+  --scroll-thumb: rgba(11, 11, 11, 0.18);
+  --scroll-thumb-hover: rgba(11, 11, 11, 0.32);
+  --radius: 8px;
+  --radius-lg: 10px;
+  --ease-out: cubic-bezier(.2, .8, .2, 1);
+
+  /* syntax */
+  --hl-comment: #a0ada0;
+  --hl-keyword: #1e754f;
+  --hl-string: #b56959;
+  --hl-number: #2f798a;
+  --hl-title: #59873a;
+  --hl-attr: #998418;
+  --hl-type: #2e8f82;
+  --hl-variable: #b07d48;
+  --hl-operator: #ab5959;
+  --hl-punct: #999999;
+  --hl-del: #b31d28;
+  --hl-add: #1c6b48;
+
+  /* table cell tints */
+  --hue-gray: #ecebe6; --hue-red: #fbe1de; --hue-orange: #fde4d1; --hue-yellow: #fbefc8; --hue-green: #dcf0d9;
+  --hue-aqua: #d3f0ea; --hue-blue: #dbe8fb; --hue-violet: #e6e0fa; --hue-magenta: #f9dfea;
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+  --paper: #0b0b0b;
+  --ink: #f0efec;
+  --ink-2: #c3c2b7;
+  --muted: #898781;
+  --line: rgba(255, 255, 255, 0.2);
+  --line-soft: rgba(255, 255, 255, 0.1);
+  --link: #3987e5;
+  --quote-rule: rgba(255, 255, 255, 0.2);
+  --code-bg: rgba(255, 255, 255, 0.1);
+  --pre-bg: #151515;
+  --pre-fg: #c0c0b8;
+  --tbl-border: rgba(255, 255, 255, 0.1);
+  --tbl-head: #151515;
+  --accent-soft: #032042;
+  --accent-text: #6da7ec;
+  --check-edge: rgba(255, 255, 255, 0.5);
+  --mark: rgba(250, 178, 25, 0.28);
+  --selection: rgba(57, 135, 229, 0.32);
+  --chip-fg: #f0efec;
+  --chip-bg: rgba(255, 255, 255, 0.1);
+  --chip-bg-hover: rgba(255, 255, 255, 0.2);
+  --surface-0: #0b0b0b;
+  --surface-1: #151515;
+  --surface-2: #1a1a19;
+  --popover: #20201f;
+  --ghost-hover: rgba(255, 255, 255, 0.075);
+  --ghost-selected: rgba(255, 255, 255, 0.15);
+  --border: rgba(255, 255, 255, 0.1);
+  --border-strong: rgba(255, 255, 255, 0.2);
+  --text: #f0efec;
+  --text-2: #c3c2b7;
+  --text-3: #898781;
+  --danger-text: #ec7e7e;
+  --success-text: #0ca30c;
+  --success-bg: #11260f;
+  --warning-text: #db9300;
+  --warning-bg: #311a00;
+  --tooltip-bg: #20201f;
+  --tooltip-fg: #f0efec;
+  --shadow-sm: 0 1px 2px 0 rgba(11, 11, 11, 0.06), 0 2px 8px 0 rgba(0, 0, 0, 0.24);
+  --shadow-lg: 0 4px 8px 0 rgba(11, 11, 11, 0.08), 0 12px 28px -2px rgba(0, 0, 0, 0.24);
+  --shadow-popover: 0 8px 24px rgba(0, 0, 0, 0.32), 0 2px 6px rgba(0, 0, 0, 0.2);
+  --ring: inset 0 0 0 1px rgba(255, 255, 255, 0.1);
+  --scroll-thumb: rgba(255, 255, 255, 0.16);
+  --scroll-thumb-hover: rgba(255, 255, 255, 0.3);
+  --hl-comment: #6a8372;
+  --hl-keyword: #4d9375;
+  --hl-string: #c98a7d;
+  --hl-number: #6394bf;
+  --hl-title: #80a665;
+  --hl-attr: #bd976a;
+  --hl-type: #5da994;
+  --hl-variable: #c99076;
+  --hl-operator: #cb7676;
+  --hl-punct: #777777;
+  --hl-del: #e06c75;
+  --hl-add: #4d9375;
+  --hue-gray: #20201f; --hue-red: #3c0e0e; --hue-orange: #371407; --hue-yellow: #311a00; --hue-green: #11260f;
+  --hue-aqua: #022720; --hue-blue: #032042; --hue-violet: #1d1649; --hue-magenta: #390f1f;
+  color-scheme: dark;
+}
+
+/* ---------- app additions (derived from the tokens above, light + dark) ---------- */
+:root {
+  --danger-bg: color-mix(in srgb, var(--danger) 10%, transparent);
+  --accent-tint: color-mix(in srgb, var(--accent) 12%, transparent);
+  --scrim: rgba(11, 11, 11, .28);
+  --sidebar-width: 256px;
+  --toolbar-height: 44px;
+}
+:root[data-theme="dark"] {
+  --scrim: rgba(0, 0, 0, .55);
+}

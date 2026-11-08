@@ -1,0 +1,11 @@
+node_modules/
+dist/
+.cache/
+.smoke-profile*/
+screenshots/
+*.local
+*.log
+.DS_Store
+Thumbs.db
+.vscode/*
+!.vscode/extensions.json
