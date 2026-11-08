@@ -30,7 +30,7 @@ button:disabled { cursor: default; }
   .tb-extra, .tb-sep { display: none !important; }
   .toolbar { gap: 2px; padding: 0 6px; }
   .tb-tools { margin-left: 0; }
-  .tb-btn.has-label:not(.tb-export) > span { display: none; }
+  .tb-btn.has-label:not(.tb-export) > span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; /* hidden, but still the button's name */ }
   .tb-doc { max-width: 38vw; }
 }
 @media (max-width: 420px) { #btn-redo { display: none; } }

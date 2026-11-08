@@ -903,6 +903,32 @@ export default function App() {
     ];
   }, [index, positions, library, settings.showScreenshots, updateSettings, theme, toggleTheme, openImport, sharePage, title]);
 
+  /*
+    Whether to lay the page out for an empty library while it is still loading.
+
+    The page header is hidden for an empty library (the welcome screen stands in for it). If
+    loading showed the header and the library then turned out to be empty, the welcome screen
+    would jump up the height of the header in front of every first-time visitor. One bit,
+    remembered from the last visit, picks the right layout from the first frame.
+  */
+  const [expectEmpty] = useState(() => {
+    try {
+      return localStorage.getItem("bs:has-library") !== "1";
+    } catch {
+      return false;
+    }
+  });
+  useEffect(() => {
+    if (library.loading) return;
+    try {
+      if (facets.total) localStorage.setItem("bs:has-library", "1");
+      else localStorage.removeItem("bs:has-library");
+    } catch {
+      // Only a layout hint; nothing depends on it being stored.
+    }
+  }, [library.loading, facets.total]);
+  const libraryEmpty = library.loading ? expectEmpty : !facets.total;
+
   /* ----------------------------------------------------------- empty state */
 
   const emptyState = useMemo(() => {
@@ -1153,7 +1179,7 @@ export default function App() {
             title={title}
             total={positions.length}
             hydrating={library.hydrating}
-            libraryEmpty={!library.loading && !facets.total}
+            libraryEmpty={libraryEmpty}
             status={
               pipelineBusy && pipelinePending ? (
                 <span className="inline-flex items-center gap-1">filling in {pipelinePending.toLocaleString()}</span>

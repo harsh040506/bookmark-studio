@@ -19,7 +19,7 @@
  * memo for every card at once.
  */
 import { ExternalLink, Folder as FolderIcon, Heart, MoreHorizontal } from "@/components/icons";
-import { memo, type MouseEvent } from "react";
+import { memo, useId, type KeyboardEvent, type MouseEvent } from "react";
 
 import type { Board, Bookmark, DeviceName, Folder } from "@shared/types";
 import { hasPage } from "@shared/types";
@@ -66,21 +66,45 @@ function HealthChip({ bookmark }: { bookmark: Bookmark }) {
 
 /* ------------------------------------------------------------------- card */
 
+/**
+ * The keyboard and screen-reader face of a card or row: a real button laid over the whole
+ * item, named by the visible title.
+ *
+ * The item itself stays a plain container, so its checkbox and tool buttons are siblings of
+ * this button rather than buttons nested inside another button, which screen readers announce
+ * badly and voice control cannot target. Mouse clicks bubble to the container, which handles
+ * them, so nothing changes for pointer users.
+ */
+function ItemHit({ id, selected, onKey }: { id: string; selected: boolean; onKey: (event: KeyboardEvent<HTMLButtonElement>) => void }) {
+  return (
+    <>
+      <button
+        type="button"
+        className="bs-item-hit"
+        aria-labelledby={selected ? `${id}-title ${id}-selected` : `${id}-title`}
+        aria-describedby={`${id}-meta`}
+        onKeyDown={onKey}
+      />
+      {selected ? (
+        <span id={`${id}-selected`} hidden>
+          selected
+        </span>
+      ) : null}
+    </>
+  );
+}
+
 function CardBase({ bookmark, selected, selecting, chrome }: ItemProps) {
   const { actions, device, showImages } = chrome;
   const openable = hasPage(bookmark);
 
   const openDetail = () => chrome.onOpenDetail(bookmark);
+  const id = useId();
 
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>
         <div
-          role="button"
-          tabIndex={0}
-          // A short, explicit name instead of every line of the card read aloud, with the
-          // selection state in it (aria-selected is not valid on a button).
-          aria-label={[bookmark.title, bookmark.domain, selected ? "selected" : ""].filter(Boolean).join(", ")}
           data-selected={selected || undefined}
           onClick={(event) => {
             // Modifier-clicks are selection gestures, not navigation — the same contract
@@ -104,19 +128,23 @@ function CardBase({ bookmark, selected, selecting, chrome }: ItemProps) {
             event.preventDefault();
             actions.open(bookmark);
           }}
-          onKeyDown={(event) => {
-            if (event.key === "Enter") {
-              event.preventDefault();
-              if (event.shiftKey && openable) actions.open(bookmark);
-              else openDetail();
-            }
-            if (event.key === " ") {
-              event.preventDefault();
-              chrome.onToggleSelect(bookmark.id, event as unknown as MouseEvent);
-            }
-          }}
           className={cn("group bs-item-card", selected && "is-selected")}
         >
+          <ItemHit
+            id={id}
+            selected={selected}
+            onKey={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault();
+                if (event.shiftKey && openable) actions.open(bookmark);
+                else openDetail();
+              }
+              if (event.key === " ") {
+                event.preventDefault();
+                chrome.onToggleSelect(bookmark.id, event as unknown as MouseEvent);
+              }
+            }}
+          />
           {showImages ? (
             <div className="bs-item-media">
               <Thumbnail bookmark={bookmark} device={device} rounded="" />
@@ -138,8 +166,8 @@ function CardBase({ bookmark, selected, selecting, chrome }: ItemProps) {
             <div className="flex items-start gap-2.5">
               <Favicon bookmark={bookmark} size={16} className="bs-item-favicon" />
               <div className="flex min-w-0 flex-1 flex-col gap-1">
-                <p className="bs-item-title clamp-2">{bookmark.title}</p>
-                <div className="bs-item-meta">
+                <p className="bs-item-title clamp-2" id={`${id}-title`}>{bookmark.title}</p>
+                <div className="bs-item-meta" id={`${id}-meta`}>
                   <span className="truncate">
                     {bookmark.domain || formatDate(bookmark.addedAt)}
                   </span>
@@ -226,16 +254,12 @@ export const BookmarkCard = memo(CardBase);
 function RowBase({ bookmark, selected, selecting, chrome }: ItemProps) {
   const { actions, device, showImages } = chrome;
   const folder = bookmark.folderId ? chrome.folderPaths.get(bookmark.folderId) : "";
+  const id = useId();
 
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>
         <div
-          role="button"
-          tabIndex={0}
-          // A short, explicit name instead of every line of the card read aloud, with the
-          // selection state in it (aria-selected is not valid on a button).
-          aria-label={[bookmark.title, bookmark.domain, selected ? "selected" : ""].filter(Boolean).join(", ")}
           data-selected={selected || undefined}
           onClick={(event) => {
             if (event.metaKey || event.ctrlKey || event.shiftKey) {
@@ -250,15 +274,23 @@ function RowBase({ bookmark, selected, selecting, chrome }: ItemProps) {
             event.preventDefault();
             actions.open(bookmark);
           }}
-          onKeyDown={(event) => {
-            if (event.key === "Enter") {
-              event.preventDefault();
-              if (event.shiftKey && hasPage(bookmark)) actions.open(bookmark);
-              else chrome.onOpenDetail(bookmark);
-            }
-          }}
           className={cn("group bs-item-row", selected && "is-selected")}
         >
+          <ItemHit
+            id={id}
+            selected={selected}
+            onKey={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault();
+                if (event.shiftKey && hasPage(bookmark)) actions.open(bookmark);
+                else chrome.onOpenDetail(bookmark);
+              }
+              if (event.key === " ") {
+                event.preventDefault();
+                chrome.onToggleSelect(bookmark.id, event as unknown as MouseEvent);
+              }
+            }}
+          />
           <span
             className={cn("bs-row-check", (selecting || selected) && "is-visible")}
             onClick={(event) => {
@@ -283,8 +315,8 @@ function RowBase({ bookmark, selected, selecting, chrome }: ItemProps) {
           )}
 
           <div className="flex min-w-0 flex-1 flex-col">
-            <span className="bs-row-title">{bookmark.title}</span>
-            <span className="bs-row-meta">
+            <span className="bs-row-title" id={`${id}-title`}>{bookmark.title}</span>
+            <span className="bs-row-meta" id={`${id}-meta`}>
               {bookmark.domain || formatDate(bookmark.addedAt)}
               {bookmark.description ? ` · ${bookmark.description}` : ""}
             </span>
@@ -310,7 +342,7 @@ function RowBase({ bookmark, selected, selecting, chrome }: ItemProps) {
           </span>
 
           <span
-            className="flex shrink-0 items-center gap-0.5"
+            className="bs-row-tools flex shrink-0 items-center gap-0.5"
             onClick={(event) => event.stopPropagation()}
           >
             <button

@@ -24,6 +24,8 @@ jobs:
         run: npm test
       - name: Build website, extension and server
         run: npm run build
+      - name: Check the public site (links, tags, sitemap, budgets)
+        run: npm run check:site
       - uses: actions/upload-artifact@v4
         with:
           name: bookmark-studio-extension

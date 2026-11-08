@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+### Website
+- New [About](https://bookmark-studio-app.vercel.app/about) and [Privacy](https://bookmark-studio-app.vercel.app/privacy) pages, a real "not found" page, and a text introduction that shows while the app starts (and stays readable without JavaScript).
+- Every page has its own title, description, canonical address, link-preview image and structured data. The site publishes `robots.txt`, a sitemap, `llms.txt`, Markdown copies of each page and `security.txt`.
+- The about page has a share box: the system share sheet where there is one, copy link, and links for X, LinkedIn, Facebook, WhatsApp, Telegram, Reddit and email.
+- After an update, a tab opened before it keeps working: the previous version's files stay cached until the next deploy. The offline cache now holds only the app, and an error page can never be cached in its place.
+- `npm run check:site` checks the built site the way crawlers and preview bots see it (status codes, headers, metadata, links, sitemap, size budgets, and an accessibility scan when axe-core is installed). CI runs it.
+
+### Accessibility
+- Cards and list rows are a container with a real button inside, named by the title, instead of a button with other buttons nested in it. Enter opens, Space selects, as before.
+- Folders with subfolders open and close with the arrow keys and announce whether they are open.
+- Secondary text, counts and links in dark mode now meet WCAG AA contrast. Toolbar buttons whose labels hide on narrow screens keep their names; sliders, progress bars and settings menus are named.
+
+### Maintenance
+- Node.js 22.12 or newer is required (Node 20 has reached end of life). puppeteer-core 25 clears the advisories reported against version 23.
+- README and site pictures are re-shot from the real app with `npm run media`.
+
 ### Large libraries
 - Previews never load more than five pages at once. The local server runs one headless browser at most; a tab's slot is freed only once it has closed, and the browser is shut down completely before a new one starts. It restarts after a set number of captures, and whenever a tab will not close.
 - The extension closes every capture window before starting another, and closes windows left behind if Chrome stops its background worker mid-capture. The page sends at most five capture requests at a time.

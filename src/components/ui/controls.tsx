@@ -43,7 +43,7 @@ function Switch({ className, ...props }: React.ComponentProps<typeof SwitchPrimi
 
 /* ----------------------------------------------------------------- slider */
 
-function Slider({ className, ...props }: React.ComponentProps<typeof SliderPrimitive.Root>) {
+function Slider({ className, "aria-label": label, ...props }: React.ComponentProps<typeof SliderPrimitive.Root>) {
   const thumbCount = Array.isArray(props.value ?? props.defaultValue) ? (props.value ?? props.defaultValue ?? []).length : 1;
   return (
     <SliderPrimitive.Root data-slot="slider" className={cn("bs-slider", className)} {...props}>
@@ -51,7 +51,8 @@ function Slider({ className, ...props }: React.ComponentProps<typeof SliderPrimi
         <SliderPrimitive.Range className="bs-slider-range" />
       </SliderPrimitive.Track>
       {Array.from({ length: thumbCount }, (_, index) => (
-        <SliderPrimitive.Thumb key={index} className="bs-slider-thumb" />
+        // The thumb is the element with role="slider", so it carries the name.
+        <SliderPrimitive.Thumb key={index} className="bs-slider-thumb" aria-label={label} />
       ))}
     </SliderPrimitive.Root>
   );

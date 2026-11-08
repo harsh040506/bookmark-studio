@@ -67,7 +67,27 @@ function registerServiceWorker(): void {
   else window.addEventListener("load", register, { once: true });
 }
 
-void probeRuntime()
+/**
+ * On the website the stylesheet is linked with media="print" so it does not hold back the
+ * first paint of the text shell (scripts/build-site.mjs). Switch it on, and wait until it has
+ * loaded, before the app draws. Elsewhere (extension, development) there is nothing to do.
+ */
+function appStyles(): Promise<void> {
+  const link = document.querySelector<HTMLLinkElement>("link[data-app-css]");
+  if (!link) return Promise.resolve();
+  const ready = link.sheet
+    ? Promise.resolve()
+    : new Promise<void>((resolve) => {
+        link.addEventListener("load", () => resolve(), { once: true });
+        // A failed stylesheet must not keep the app from starting.
+        link.addEventListener("error", () => resolve(), { once: true });
+      });
+  return ready.then(() => {
+    link.media = "all";
+  });
+}
+
+void Promise.all([probeRuntime().catch(() => undefined), appStyles()])
   .catch(() => undefined)
   .finally(() => {
     watchRuntime();

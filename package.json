@@ -23,7 +23,7 @@
     "url": "https://github.com/harsh040506/bookmark-studio.git"
   },
   "engines": {
-    "node": "^20.19.0 || >=22.12.0"
+    "node": ">=22.12.0"
   },
   "scripts": {
     "dev": "vite",
@@ -38,6 +38,8 @@
     "test:watch": "vitest",
     "test:smoke": "node scripts/smoke.mjs",
     "icons": "node scripts/build-icons.mjs",
+    "media": "node scripts/capture-media.mjs",
+    "check:site": "node scripts/check-site.mjs",
     "build:vercel": "npm run build:web && npm run build:extension"
   },
   "dependencies": {
@@ -66,7 +68,7 @@
     "cmdk": "^1.1.1",
     "express": "^4.21.2",
     "motion": "^12.43.0",
-    "puppeteer-core": "^23.11.1",
+    "puppeteer-core": "^25.16.0",
     "react": "^19.2.1",
     "react-dom": "^19.2.1",
     "sonner": "^2.0.7",

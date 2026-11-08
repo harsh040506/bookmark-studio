@@ -188,7 +188,7 @@ export function AppTopbar(props: TopbarProps) {
   return (
     <div className="bs-topbar">
       {/* ------------------------------------------------------------ toolbar */}
-      <header className="toolbar" role="toolbar" aria-label="Library">
+      <header className="toolbar">
         <div className="tb-group">
           <Hint label="Show navigation">
             <button type="button" className="tb-btn bs-nav-toggle" onClick={props.onToggleSidebar} aria-label="Show navigation">

@@ -60,6 +60,8 @@ if (isProduction) {
   app.use(
     express.static(clientDir, {
       index: false,
+      // /about and /privacy are about.html and privacy.html, as on the hosted site.
+      extensions: ["html"],
       setHeaders: (res, filePath) => {
         res.setHeader(
           "cache-control",

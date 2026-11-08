@@ -254,7 +254,7 @@ export function SettingsDialog({
               </Row>
               <Row label="Default layout" hint="What a fresh window opens on.">
                 <Select value={settings.defaultView} onValueChange={(value) => onChange({ defaultView: value as ViewMode })}>
-                  <SelectTrigger size="sm" className="w-36">
+                  <SelectTrigger size="sm" aria-label="Default layout" className="w-36">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -266,7 +266,7 @@ export function SettingsDialog({
               </Row>
               <Row label="Default sort" hint="A search always sorts by best match while it runs.">
                 <Select value={settings.defaultSort} onValueChange={(value) => onChange({ defaultSort: value as SortMode })}>
-                  <SelectTrigger size="sm" className="w-36">
+                  <SelectTrigger size="sm" aria-label="Default sort" className="w-36">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -331,7 +331,7 @@ export function SettingsDialog({
                 {online ? <Check /> : <Plug />}
                 <div>
                   <p className="font-medium">{status.title}</p>
-                  <p className="opacity-85">{status.detail}</p>
+                  <p>{status.detail}</p>
                 </div>
               </Note>
 
@@ -497,7 +497,7 @@ export function SettingsDialog({
               />
               <Row label="Screenshot size" hint="Captures are taken at this viewport; changing it re-captures over time.">
                 <Select value={settings.previewDevice} onValueChange={(value) => onChange({ previewDevice: value as DeviceName })}>
-                  <SelectTrigger size="sm" className="w-32">
+                  <SelectTrigger size="sm" aria-label="Screenshot size" className="w-32">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -547,7 +547,7 @@ export function SettingsDialog({
                   </span>
                   <span className="text-hint text-text-3 tabular">{storage.count.toLocaleString()} stored images</span>
                 </div>
-                <Progress value={budget ? Math.min(100, (used / budget) * 100) : 0} />
+                <Progress value={budget ? Math.min(100, (used / budget) * 100) : 0} aria-label="Image storage used" />
                 <p className="form-row-hint bs-hint-wide">
                   Screenshots, page images and favicons are kept here rather than in the browser’s cache, so they survive a cache clear,
                   work offline and can be counted. The least recently shown are dropped past the budget.
@@ -756,7 +756,7 @@ export function JobBar({
           </Button>
         ) : null}
       </div>
-      <Progress value={percent} />
+      <Progress value={percent} aria-label={label} />
       <p className="text-xs text-text-3 tabular">
         {done.toLocaleString()} of {total.toLocaleString()}
         {failed ? ` · ${failed} failed` : ""}

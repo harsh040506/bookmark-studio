@@ -75,7 +75,17 @@ export function useAppSafeguards({ itemCount }: { itemCount: number }): void {
       toast("A new version of Bookmark Studio is ready", {
         description: "Reload to use it. Your library is not affected.",
         duration: Infinity,
-        action: { label: "Reload", onClick: () => window.location.reload() },
+        action: {
+          label: "Reload",
+          onClick: () => {
+            // A reload would drop changes the device has not stored yet.
+            if (writeHealth().unsaved) {
+              toast.warning("Some changes are not saved yet", { description: "Use Try again on the saving message, then reload." });
+              return;
+            }
+            window.location.reload();
+          },
+        },
       });
     };
     navigator.serviceWorker.addEventListener("controllerchange", onChange);

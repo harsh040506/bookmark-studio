@@ -114,6 +114,8 @@ function Row({
   accent,
   trailing,
   onContextMenu,
+  expanded,
+  onToggle,
 }: {
   icon?: ReactNode;
   label: ReactNode;
@@ -124,6 +126,9 @@ function Row({
   accent?: string;
   trailing?: ReactNode;
   onContextMenu?: (event: React.MouseEvent) => void;
+  /** Set for a folder with subfolders: whether they are showing, and how to toggle them. */
+  expanded?: boolean;
+  onToggle?: () => void;
 }) {
   return (
     <div className={cn("bs-nav-row", active && "is-on")}>
@@ -134,6 +139,18 @@ function Row({
         style={{ paddingLeft: 8 + indent * 14 }}
         className="bs-nav-button"
         aria-current={active ? "page" : undefined}
+        aria-expanded={onToggle ? Boolean(expanded) : undefined}
+        // A folder with subfolders opens and closes from the keyboard the way a tree does.
+        onKeyDown={
+          onToggle
+            ? (event) => {
+                if ((event.key === "ArrowRight" && !expanded) || (event.key === "ArrowLeft" && expanded)) {
+                  event.preventDefault();
+                  onToggle();
+                }
+              }
+            : undefined
+        }
       >
         {accent ? (
           <span className="bs-nav-dot" style={{ background: accent }} aria-hidden />
@@ -322,6 +339,14 @@ function FolderTree({
     );
   }
 
+  const toggle = (id: string) =>
+    setExpanded((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+
   const render = (parentId: string | null, depth: number): ReactNode[] => {
     const list = (children.get(parentId) ?? []).slice().sort(compareFolders);
     return list.flatMap((folder) => {
@@ -333,20 +358,16 @@ function FolderTree({
           indent={depth}
           icon={
             kids.length ? (
+              // A pointer shortcut only. Keyboard and screen-reader users open the folder
+              // with the arrow keys on the row itself, which carries aria-expanded; a
+              // second control nested inside the row's button would be unreachable for them.
               <span
-                role="button"
-                tabIndex={-1}
+                aria-hidden="true"
                 onClick={(event) => {
                   event.stopPropagation();
-                  setExpanded((current) => {
-                    const next = new Set(current);
-                    if (next.has(folder.id)) next.delete(folder.id);
-                    else next.add(folder.id);
-                    return next;
-                  });
+                  toggle(folder.id);
                 }}
                 className={cn("bs-nav-chevron bs-nav-twist", isOpen && "is-open")}
-                aria-label={isOpen ? "Collapse" : "Expand"}
               >
                 <ChevronRight size={12} />
               </span>
@@ -359,6 +380,8 @@ function FolderTree({
           active={activeId === folder.id}
           onClick={() => navigate({ kind: "folder", id: folder.id })}
           trailing={menuFor(folder)}
+          expanded={kids.length ? isOpen : undefined}
+          onToggle={kids.length ? () => toggle(folder.id) : undefined}
         />,
       ];
       if (isOpen && kids.length) rows.push(...render(folder.id, depth + 1));

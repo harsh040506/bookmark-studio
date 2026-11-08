@@ -1,60 +1,98 @@
 <div align="center">
 
-<img src="public/icons/icon-192.png" width="72" height="72" alt="">
+<img src="public/icons/icon-192.png" width="80" height="80" alt="">
 
 # Bookmark Studio
 
-**A calm home for everything you save.**
+### You saved it for a reason. Now you can find it.
 
-Bring in your bookmarks from any browser or service, then search them properly, find the dead links,
-spot duplicates and see every page at a glance. Free, open source, and private: it runs in your browser.
+A free, private bookmark manager that runs in your browser. Bring in years of bookmarks from any browser or service,<br>
+then search them properly, see every page at a glance, and clear out the dead links and duplicates.
 
-No account · No tracking · No AI · MIT licensed
+[![CI](https://github.com/harsh040506/bookmark-studio/actions/workflows/ci.yml/badge.svg)](https://github.com/harsh040506/bookmark-studio/actions/workflows/ci.yml)
+[![MIT licence](https://img.shields.io/badge/licence-MIT-1f1e1d)](LICENSE)
 
-[**Open the app**](https://bookmark-studio-app.vercel.app) · [Get the extension](#2-the-chrome-extension) · [Run it locally](#3-on-your-own-computer) · [How it works](docs/ARCHITECTURE.md)
+**[Open the app](https://bookmark-studio-app.vercel.app)** · [Get the extension](#the-chrome-extension) · [Run it yourself](#on-your-own-computer) · [Privacy](https://bookmark-studio-app.vercel.app/privacy)
+
+No account · No tracking · No AI · Works offline
+
+<br>
+
+<img src="docs/media/demo.gif" width="880" alt="A walk-through of Bookmark Studio: searching for 'typografy' finds typography pages, typing kind:video shows only videos, a bookmark opens in a side panel, and the library switches between grid, masonry and list layouts.">
 
 </div>
 
-![Bookmark Studio: a search for "design" across a library, shown as a grid of page previews](docs/screenshots/search-light.png)
+<br>
 
----
+## Sound familiar?
+
+You have been saving pages for years. Some are in Chrome, some in Firefox on an old laptop, some in Pocket or Raindrop or a notes app. And when you need one:
+
+- **You can't remember what it was called.** Browser search only reads titles, and you remember what the page was *about*.
+- **It's gone.** The site moved or shut down, and you find out the day you need it.
+- **It's there three times,** in three folders, under three different names.
+- **Everything looks the same.** A wall of blue links and tiny icons gives your memory nothing to hold on to.
+
+So the bookmarks bar turns into a junk drawer, and you stop trusting it. Bookmark Studio is built to make that drawer useful again.
+
+## What it does about it
+
+| When this happens | Bookmark Studio |
+| --- | --- |
+| Your bookmarks are spread across browsers and apps | Imports from **28 sources**, including every major browser, Pocket, Instapaper, Raindrop, Pinboard, Notion and plain CSV. It shows exactly what will arrive first, and any import can be undone. |
+| You remember the idea, not the title | Searches the **text of the page itself**, forgives typos, and understands filters like `site:github.com`, `kind:video` or "saved last month". |
+| A list of links tells you nothing | Shows **every page as a preview**, in a grid, masonry or compact list. Only what's on screen is drawn, so big libraries stay smooth. |
+| Links have quietly died | **Checks every link**, flags dead and moved pages, and finds the Internet Archive's copy. |
+| Duplicates pile up | **Finds and merges duplicates** in one step, and the merge can be undone. |
+| You're worried about where your data goes | Keeps your library **in your browser, on your device**. No account, no server holding your bookmarks, no analytics, no AI. |
+
+<table>
+<tr>
+<td width="50%"><img src="docs/media/search-light.webp" alt="Searching for the misspelled word 'typografy' finds Google Fonts and Typewolf, with a note that it searched for typography instead."></td>
+<td width="50%"><img src="docs/media/detail-light.webp" alt="The detail panel for a bookmark: a large preview, the page's own description, tags, a note field and highlights."></td>
+</tr>
+<tr>
+<td><sub><b>Typos forgiven.</b> "typografy" finds typography, and it tells you it corrected you.</sub></td>
+<td><sub><b>Everything about a page in one place:</b> preview, description, tags, notes and highlights.</sub></td>
+</tr>
+</table>
+
+## Start in a minute
+
+1. **Export your bookmarks.** In Chrome, open the bookmark manager (`Ctrl Shift O`), click **⋮**, then **Export bookmarks**. Every browser has the same option.
+2. **[Open Bookmark Studio](https://bookmark-studio-app.vercel.app)** and drop the file anywhere on the page.
+3. **Check the preview, import, and search.**
+
+Not ready to bring your own? Load the **sample library** from the welcome screen and try everything on real links first. It comes out again in one click.
 
 ## Three ways to use it
 
-Pick whichever suits you. It's the same app every way.
+It's the same app every way. Pick whichever suits you.
 
-### 1. The website: nothing to install
+### The website
 
-Open the app in any modern browser and start right away:
+Nothing to install. Import, search, organise, tag and export. Install it from the address bar and it works offline like a regular app.
 
-- **Import** your bookmarks (drop the file anywhere), or **try the sample library** first.
-- Search, filter, tag, file into folders and boards, save smart collections, export.
-- **Install it** as an app from the address bar (it's a PWA), and it keeps working offline.
+A web page can't read other websites on its own, so page previews, link checks and full-text search need the extension or the local server. The app tells you plainly which one you're using and what each adds.
 
-On its own, a web page can't read other websites, so page previews, link checks and "read the page for search" stay off until you add the extension or run it locally. The app says so plainly and shows you how.
+### The Chrome extension
 
-### 2. The Chrome extension
+For Chrome, Edge, Brave, Arc, Opera and Vivaldi. It adds previews, link checks and full-text search, and **keeps your browser's bookmarks in sync both ways**: star a page in Chrome and it appears here; tidy it here and Chrome follows. With the extension installed, the website gets every capability too.
 
-For Chrome, Edge, Brave, Arc, Opera and Vivaldi. The extension:
+**Install:** [download the extension](https://bookmark-studio-app.vercel.app/bookmark-studio-extension.zip) (also in the app under **Settings → Connections**). Unzip it, open `chrome://extensions`, turn on **Developer mode**, and choose **Load unpacked**.
 
-- **mirrors your browser's bookmarks both ways**: star a page in Chrome and it appears; edit it here and Chrome follows;
-- **captures previews, reads pages and checks links** automatically;
-- **powers the website too.** With the extension installed, the website gets every capability, and can optionally sync with the browser's bookmarks.
+### On your own computer
 
-**Install:** download the extension from the app's **Settings → Connections**, or get `bookmark-studio-extension.zip` from the [latest release](https://github.com/harsh040506/bookmark-studio/releases/latest). Unzip it, open `chrome://extensions`, turn on **Developer mode**, and click **Load unpacked**. When the extension is used with a copy of the app running on your own computer, it asks once before that address can use it.
-
-### 3. On your own computer
-
-Every capability in **any** browser. Previews are rendered in headless Chrome or Edge, with no capture windows. You need [Node.js](https://nodejs.org) 20 or newer.
+Every capability in **any** browser, with previews rendered by headless Chrome or Edge. Needs [Node.js](https://nodejs.org) 22 or newer.
 
 ```bash
 git clone https://github.com/harsh040506/bookmark-studio.git
 cd bookmark-studio
 npm install
-npm start
+npm start          # opens http://127.0.0.1:5174
 ```
 
-`npm start` builds everything the first time, then opens **http://127.0.0.1:5174**. Prefer Docker?
+Or with Docker:
 
 ```bash
 docker build -t bookmark-studio .
@@ -65,96 +103,90 @@ docker run --rm -p 127.0.0.1:5174:5174 bookmark-studio
 | --- | :---: | :---: | :---: | :---: |
 | Import, search, organise, export | ✓ | ✓ | ✓ | ✓ |
 | Works offline, installable | ✓ | ✓ | ✓ | ✓ |
-| Read pages for search, check links | | ✓ | ✓ | ✓ |
-| Screenshot previews, offline copies | | ✓ | ✓ | ✓ (headless) |
+| Full-text search, link checks | | ✓ | ✓ | ✓ |
+| Page previews, offline copies | | ✓ | ✓ | ✓ (headless) |
 | Two-way sync with browser bookmarks | | ✓ (opt-in) | ✓ | with the extension |
-| Any browser (Firefox, Safari) | ✓ | | | ✓ |
+| Firefox and Safari | ✓ | | | ✓ |
 
----
+## Everything else it does
 
-## What it does
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/media/library-dark.webp">
+  <img src="docs/media/library-light.webp" alt="A library shown as a grid of large page previews, with folders in the sidebar.">
+</picture>
 
-<table>
-<tr>
-<td width="50%"><img src="docs/screenshots/detail-light.png" alt="The detail panel for one bookmark: preview, description, tags, note and facts"></td>
-<td width="50%"><img src="docs/screenshots/search-dark.png" alt="The same library in dark mode"></td>
-</tr>
-</table>
+- **Organise your way:** folders, boards and tags, plus smart collections that fill themselves from a saved search. A sparkle marks tags found in the page's own words, so you can tell them from the ones you added.
+- **Find by look:** search by colour, or find pages that look alike, using image fingerprints.
+- **Keep the page itself:** offline copies stay readable with the network off.
+- **Notes and highlights** on any bookmark.
+- **A command palette** (`Ctrl K` or `⌘ K`) for every bookmark, folder and command, and full keyboard control: press `?` for the shortcuts.
+- **Share without uploading:** export to the standard bookmarks file, JSON or CSV, or share a view as a single web page with the pictures inside.
+- **Undo for everything destructive**, and an activity log of what changed.
+- **Light and dark themes**, and reduced motion when your system asks for it.
 
-**Bring everything in.** Imports from **28 sources**:
+<p align="center">
+  <img src="docs/media/mobile-light.webp" width="260" alt="Bookmark Studio on a phone, showing a folder of bookmarks as a two-column grid of previews.">
+  &nbsp;&nbsp;
+  <img src="docs/media/welcome-light.webp" width="560" alt="The first-run screen: import your bookmarks, try a sample library, or connect the extension.">
+</p>
 
-- browsers: Chrome, Edge, Brave, Opera, Vivaldi, Chromium, Arc, DuckDuckGo, Samsung Internet, Firefox, Safari, iCloud;
-- read-later services: Pocket, Instapaper, Readwise Reader;
-- bookmarking services: Raindrop.io, Pinboard, Delicious, Diigo, Google Bookmarks, X;
-- notes and archives: Notion, Evernote;
-- plain files: HTML, CSV (with column mapping), JSON, a list of links, and its own backups.
+## Private by design
 
-The source is detected, you preview exactly what will be imported, and every import can be undone or removed in one step later. Folder structure, dates, tags and your own ordering all carry over.
+- **Your library never leaves your browser.** It lives in IndexedDB on your device. There's no account, no sync service and no analytics.
+- **The only network requests go to the sites in your library**, and only when you've connected the extension or the local server. They carry no cookies and no referrer.
+- **No AI.** Categories come from rules, tags from a list of topics, "similar" from word statistics and "looks like" from image fingerprints. Nothing you save is sent to a model.
 
-**Find anything.**
+The [privacy page](https://bookmark-studio-app.vercel.app/privacy) explains it in plain language, and [SECURITY.md](SECURITY.md) covers the threat model, including how requests to private network addresses are blocked.
 
-- Search that forgives typos ("clipbord" finds the clipboard manager) and tells you when it corrected one.
-- Operators: `tag:` `site:` `is:dead` `has:offline` `kind:video` `color:blue` `before:`.
-- Plain English: "saved last month", "never opened", "older than a year".
-- A command palette (`Ctrl/⌘ K`) for bookmarks, places and every command.
+## Questions
 
-**See every page.**
+<details>
+<summary><b>Is it really free?</b></summary>
 
-- Screenshot previews and page images in a grid, masonry or dense list, windowed so 100,000 bookmarks scroll smoothly.
-- "Looks like" and search by colour, using perceptual hashes; no model involved.
+Yes. It's open source under the MIT licence, with no paid tier and no account.
+</details>
 
-**Keep it healthy.**
+<details>
+<summary><b>What happens if I clear my browser data?</b></summary>
 
-- Link checks flag dead, moved and blocked pages, with Wayback Machine fallbacks.
-- Duplicates are detected and merged in one undoable step, and duplicate pictures too.
-- Offline copies keep the page itself, readable with the network off.
+The library is stored by your browser, so clearing this site's data deletes it. Export a backup from **Settings** now and then. It's one file you can import anywhere.
+</details>
 
-**Organise your way.**
+<details>
+<summary><b>Can I use it on more than one device?</b></summary>
 
-- Folders, boards and tags. A sparkle marks tags found in the page's own words, so you can tell them from yours.
-- Smart collections that fill themselves from a saved search.
-- Notes and highlights.
+Each browser keeps its own library. Move one with a backup file, or use the extension: your browser's own bookmark sync (such as Chrome sync) then carries your bookmarks between devices.
+</details>
 
-**Share without uploading.** Export to the browser's HTML format, a complete JSON backup or CSV, or **share a view as a single self-contained web page** with the pictures inside.
+<details>
+<summary><b>Can I get my bookmarks out again?</b></summary>
 
-**Considerate by default.**
+Always. Export to the standard bookmarks HTML file that every browser imports, a complete JSON backup, or CSV.
+</details>
 
-- Undo for everything destructive, and an activity log.
-- System, Light and Dark themes, with reduced motion when you ask for it.
-- Fully keyboard-operable: press `?` for the shortcuts.
+<details>
+<summary><b>How big a library can it handle?</b></summary>
 
-<p align="center"><img src="docs/screenshots/mobile-light.png" width="280" alt="Bookmark Studio on a phone"> &nbsp; <img src="docs/screenshots/welcome-light.png" width="560" alt="The first-run welcome: import, try the sample, or connect"></p>
-
----
-
-## Privacy
-
-- **Your library never leaves your browser.** It's stored in IndexedDB on your device. There is no account, no sync service and no analytics.
-- **The only network requests go to the sites in your library**, and only when the extension or the local server is connected. They're sent without cookies and without a referrer.
-- **No AI.**
-  - Categories come from rules and tags from term statistics.
-  - "Similar" uses TF-IDF and "looks like" uses perceptual hashing.
-  - Typo correction draws on your own library's vocabulary, and descriptions come from the pages themselves.
-
-Details, including how private network addresses are blocked, are in [SECURITY.md](SECURITY.md).
-
----
+It's tested with real browser exports of over 1,300 links, which import in a few seconds. The grid only draws what's on screen, so much larger libraries stay smooth, and preview capture never loads more than five pages at once.
+</details>
 
 ## For developers
 
 ```bash
 npm install
 npm run dev          # app + local API at http://localhost:5173, with hot reload
-npm test             # 400+ unit tests
+npm test             # unit tests
 npm run check        # TypeScript, client and server
 npm run build        # dist/web, dist/extension (+ zip), dist/server
+npm run check:site   # the public pages: tags, links, sitemap, structured data, size budgets
 npm run test:smoke   # loads the built extension and website in a real Chrome and drives both
 ```
 
-- **Stack:** React 19, Vite 7, TypeScript, Radix primitives, Tailwind for layout, Express and puppeteer-core for the local server. No framework on the server, no database.
-- **Design:** one design system throughout. The tokens and components live in [`src/styles`](src/styles), typography is DM Sans, Newsreader and JetBrains Mono, and icons are Hugeicons. [docs/DESIGN.md](docs/DESIGN.md) summarises the rules.
-- **Architecture:** how one codebase runs as a website, an extension and a local server, and how the extension bridge works, is in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
-- **Hosting your own copy:** `npm run build:web` produces a static site in `dist/web` for any static host. A `vercel.json` is included, so importing the repository into Vercel works with no settings. To let the extension serve your copy, build it with `SITE_URL` set to your address (on Vercel this is picked up automatically).
+- **Stack:** React 19, Vite 7, TypeScript, Radix primitives and Tailwind for layout; Express and puppeteer-core for the local server. No server framework, no database.
+- **Design:** one design system throughout, in [`src/styles`](src/styles), summarised in [docs/DESIGN.md](docs/DESIGN.md). Type is DM Sans, Newsreader and JetBrains Mono; icons are Hugeicons.
+- **Architecture:** how one codebase runs as a website, an extension and a local server is in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). Notes for coding agents are in [AGENTS.md](AGENTS.md).
+- **The public pages** (about, privacy, llms.txt, sitemap) are generated from [`site/content.mjs`](site/content.mjs) at build time. Pictures of the app are re-shot from the real thing with `npm run media`.
+- **Hosting your own copy:** `npm run build:web` produces a static site in `dist/web`. `vercel.json` is included, so importing the repository into Vercel needs no settings. Set `SITE_URL` to your address so links, previews and the sitemap point at your copy (Vercel's production address is picked up automatically). [docs/HOSTING.md](docs/HOSTING.md) covers the host rules, rollbacks and refreshing link previews.
 
 ### Configuration (local server)
 
@@ -172,9 +204,12 @@ All optional.
 | `SCREENSHOT_CACHE_MAX_BYTES` | `536870912` (512 MB) | Disk ceiling for the preview cache |
 | `LOG_LEVEL` | `info` | `debug`, `info`, `warn` or `error`. Logs are one JSON object per line, with web addresses cut to the site name |
 | `NO_OPEN` | unset | Set to `1` to stop `npm start` opening a browser |
+| `SITE_URL` | Vercel's address | Build time: the public address used in canonical links, previews and the sitemap |
 
-Contributions are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) first.
+## Contributing
 
-## License
+Bug reports, ideas and pull requests are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) first, and report security problems privately as described in [SECURITY.md](SECURITY.md).
 
-[MIT](LICENSE). Use it, change it, ship it.
+## Licence
+
+[MIT](LICENSE). Use it, change it, share it.

@@ -22,7 +22,7 @@ export default defineConfig({
     },
   },
   test: {
-    include: ["src/**/*.{test,spec}.{ts,tsx}", "server/**/*.{test,spec}.ts"],
+    include: ["src/**/*.{test,spec}.{ts,tsx}", "server/**/*.{test,spec}.ts", "site/**/*.{test,spec}.ts"],
     exclude: ["node_modules/**", "dist/**"],
   },
 });

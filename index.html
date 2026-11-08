@@ -6,30 +6,24 @@
     <title>Bookmark Studio</title>
     <meta
       name="description"
-      content="A local-first bookmark manager and knowledge base. Import from any browser or service, search properly, find dead links and duplicates — everything stays in your browser. Free and open source." />
+      content="Import bookmarks from any browser or service, search them properly, find dead links and duplicates, and see every page at a glance. Free, open source, no account." />
     <meta name="theme-color" content="#faf9f5" media="(prefers-color-scheme: light)" />
     <meta name="theme-color" content="#0b0b0b" media="(prefers-color-scheme: dark)" />
     <meta name="color-scheme" content="light dark" />
-    <meta property="og:type" content="website" />
-    <meta property="og:title" content="Bookmark Studio" />
-    <meta property="og:description" content="A calm home for everything you save. Local-first, open source, no account." />
-    <meta property="og:image" content="icons/icon-512.png" />
     <meta name="bookmark-studio" content="app" />
     <link rel="icon" href="favicon.svg" type="image/svg+xml" />
     <link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
     <link rel="manifest" href="manifest.webmanifest" />
+    <!-- site:head -->
     <!-- Sets data-theme before the first paint so there is no flash. A separate file keeps the
          extension's content security policy free of inline scripts. -->
     <script src="theme-init.js"></script>
   </head>
   <body>
-    <div id="root"></div>
-    <noscript>
-      <p style="max-width: 34rem; margin: 18vh auto; padding: 0 1.5rem; font: 16px/1.5 system-ui, sans-serif">
-        Bookmark Studio needs JavaScript. Your library is stored in this browser and drawn on the fly, so there is no
-        server-rendered page to fall back to.
-      </p>
-    </noscript>
+    <!-- The website build (scripts/build-site.mjs) fills these in: search and social tags above,
+         and a text shell here that shows while the app starts. The extension keeps them empty. -->
+    <div id="root"><!-- site:shell --></div>
+    <!-- site:noscript -->
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

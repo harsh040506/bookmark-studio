@@ -45,7 +45,7 @@
   --border-strong: rgba(11, 11, 11, 0.2);
   --text: #0b0b0b;
   --text-2: #52514e;
-  --text-3: #898781;
+  --text-3: #6b6a65; /* 4.5:1 or better on every light surface (WCAG AA for small text) */
   --danger: #d03b3b;
   --danger-text: #8e2626;
   --success-text: #006300;
@@ -92,7 +92,7 @@
   --muted: #898781;
   --line: rgba(255, 255, 255, 0.2);
   --line-soft: rgba(255, 255, 255, 0.1);
-  --link: #3987e5;
+  --link: #5b9bea; /* 4.5:1 or better on every dark surface */
   --quote-rule: rgba(255, 255, 255, 0.2);
   --code-bg: rgba(255, 255, 255, 0.1);
   --pre-bg: #151515;

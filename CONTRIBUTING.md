@@ -11,7 +11,7 @@ npm install
 npm run dev        # the app and the local API at http://localhost:5173
 ```
 
-You need Node.js 20.19+ or 22.12+. Chrome or Edge is optional; it is only used for screenshot previews and the smoke test.
+You need Node.js 22.12 or newer. Chrome or Edge is optional; it is only used for screenshot previews and the smoke test.
 
 ## Before you open a pull request
 
@@ -19,15 +19,16 @@ You need Node.js 20.19+ or 22.12+. Chrome or Edge is optional; it is only used f
 npm run check      # TypeScript, for the app and for the server
 npm test           # unit tests (Vitest)
 npm run build      # website, extension and server
+npm run check:site # the public pages: tags, links, sitemap, structured data, size budgets
 npm run test:smoke # optional: drives the built extension and website in a real Chrome
 ```
 
-All four should pass. CI runs the first three on every pull request.
+All five should pass. CI runs all but the smoke test on every pull request. Coding agents: see [AGENTS.md](AGENTS.md).
 
 ## Ground rules
 
 - **Local-first.** Nothing leaves the user's browser except requests to the sites in their own library, and only when a backend (the extension or the local server) is connected. No analytics, no third-party services, no accounts.
-- **No AI or language models.** Categories come from rules, tags from term statistics, similarity from TF-IDF and perceptual hashes. Please keep it that way.
+- **No AI or language models.** Categories come from rules, tags from a list of topics, similarity from TF-IDF and perceptual hashes. Please keep it that way.
 - **One codebase, three runtimes.** Anything that needs the network goes through `src/lib/api.ts`, which picks the backend (see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)). Never call `fetch` on another origin directly from a component.
 - **The design system is the only design system.** Use the tokens in `src/styles/tokens.css` and the components in `src/styles/ui.css` and `src/components/ui/`. Don't hard-code colours, add new fonts, or mix in another icon set. Compose new surfaces from the existing tokens, as described in [docs/DESIGN.md](docs/DESIGN.md). Icons come from Hugeicons through `src/components/icons.tsx`.
 - **Scale matters.** Nothing in `App.tsx` may `map`, `filter` or `sort` the whole library. Ask the selection engine (`src/lib/engine.ts`) for a subset.
