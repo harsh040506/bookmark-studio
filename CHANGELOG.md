@@ -11,6 +11,7 @@
 - Import: the sources that match the file are listed first, the list is a keyboard-friendly radio group, the Import button stays visible however long the step is, and a loaded sample library can be removed as part of a real import.
 - Light favicons (white logos) sit on a dark chip, so they no longer show as blank squares. Cards without a preview show a larger icon.
 - Theme menu icons sit beside their labels. Long titles wrap inside their cards. The list view's folder column lines up and shows the folder's own name.
+- The hosted website no longer requests `/api/ping`, which only exists on the local server, so its console stays free of a 404 on every load and focus. The local server marks the pages it serves instead.
 - The sidebar says "Add the extension for previews" rather than "Offline" when the network is fine. Cards have short, accurate screen-reader names.
 
 ## 5.0.0

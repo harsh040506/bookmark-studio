@@ -91,6 +91,11 @@ async function pingServer(): Promise<{ ok: boolean; screenshots: boolean }> {
   }
   // Only same-origin: the local server serves the app and the API from one origin.
   if (location.protocol !== "http:" && location.protocol !== "https:") return { ok: false, screenshots: false };
+  // The local server marks the page it serves. Without the mark this is a static host,
+  // where the request could only 404 (and log an error) on every load and focus.
+  if (!import.meta.env.DEV && !document.querySelector('meta[name="bookmark-studio-server"]')) {
+    return { ok: false, screenshots: false };
+  }
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 1_500);
   try {

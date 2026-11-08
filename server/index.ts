@@ -7,6 +7,7 @@
  * free: static asset serving, SPA fallback routing, and an orderly shutdown that closes
  * the headless browser rather than orphaning it.
  */
+import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Server } from "node:http";
@@ -71,9 +72,23 @@ if (isProduction) {
 
   // SPA fallback. Registered after `/api`, which ends in its own 404 handler, so an
   // unknown API path can never be answered with the HTML shell.
-  app.get("*", (_req, res) => {
-    res.setHeader("cache-control", "no-cache");
-    res.sendFile(path.join(clientDir, "index.html"));
+  /*
+    The page is marked as served by this server, so the client only probes `/api/ping`
+    where an API exists. The same build is also hosted statically (Vercel), where that
+    probe could only ever 404 and leave an error in every visitor's console.
+  */
+  let shell: string | null = null;
+  app.get("*", async (_req, res, next) => {
+    try {
+      shell ??= (await fs.readFile(path.join(clientDir, "index.html"), "utf8")).replace(
+        "<head>",
+        '<head><meta name="bookmark-studio-server" content="">',
+      );
+      res.setHeader("cache-control", "no-cache");
+      res.type("html").send(shell);
+    } catch (error) {
+      next(error);
+    }
   });
 }
 
