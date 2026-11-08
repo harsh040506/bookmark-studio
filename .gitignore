@@ -2,7 +2,7 @@ node_modules/
 dist/
 .cache/
 .smoke-profile*/
-screenshots/
+/screenshots/
 *.local
 *.log
 .DS_Store
