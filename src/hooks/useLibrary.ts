@@ -57,6 +57,7 @@ import {
   startSync as startChromeSync,
   updateBookmarkNode,
 } from "../lib/chrome-bookmarks";
+import { log } from "../lib/log";
 import { classify, isTopicTag, suggestTags, topicsIn } from "../lib/classify";
 import * as db from "../lib/db";
 import { buildLibraryIndex, countFacets, type LibraryIndex } from "../lib/engine";
@@ -742,7 +743,9 @@ export function useLibrary() {
         undoable,
       };
       setActivity((current) => [entry, ...current].slice(0, 200));
-      void db.appendActivity(entry);
+      // The activity log is a convenience; failing to record one entry must never be
+      // reported as if the library itself were at risk.
+      void db.appendActivity(entry).catch((error: unknown) => log.warn("activity.write-failed", { error }));
     },
     [],
   );

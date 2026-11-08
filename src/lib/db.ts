@@ -31,7 +31,6 @@
  * {@link StoredBookmark}.
  */
 import {
-  DEFAULT_SETTINGS,
   type ActivityEntry,
   type Board,
   type Bookmark,
@@ -41,6 +40,8 @@ import {
   type SmartCollection,
   type Source,
 } from "../../shared/types";
+import { log } from "./log";
+import { repairBookmark, repairFolders, repairSettings, type RepairReport } from "./repair";
 
 const DB_NAME = "smart-bookmark-studio";
 /**
@@ -146,9 +147,22 @@ function stampState(bookmark: Bookmark): StoredBookmark {
  * exports, into backups, and into the undo stack, and the first time one of them
  * disagreed with the row it describes there would be no way to tell which was right.
  */
-function unstamp(row: StoredBookmark | Bookmark): Bookmark {
+/**
+ * A stored row, minus its index stamps, repaired to today's shape (see `repair.ts`).
+ * `null` only for a record with no usable id.
+ */
+function unstamp(row: StoredBookmark | Bookmark, report?: RepairReport): Bookmark | null {
+  if (!row || typeof row !== "object") {
+    if (report) report.dropped += 1;
+    return null;
+  }
   const { idxState: _state, idxArrived: _arrived, ...bookmark } = row as StoredBookmark;
-  return bookmark;
+  return repairBookmark(bookmark, report);
+}
+
+/** Logs, once per read, how many stored records needed fixing. */
+function noteRepairs(where: string, report: RepairReport): void {
+  if (report.repaired || report.dropped) log.warn("storage.repaired-records", { where, ...report });
 }
 
 let dbPromise: Promise<IDBDatabase> | null = null;
@@ -369,30 +383,254 @@ function openDatabase(): Promise<IDBDatabase> {
   return opening;
 }
 
-function transact<T>(
-  storeNames: StoreName | StoreName[],
+/**
+ * Failures worth one more attempt.
+ *
+ * `InvalidStateError` is a connection closed underneath us (another tab upgraded the
+ * database, or the browser reclaimed it); reopening fixes it. `TransactionInactiveError`,
+ * `UnknownError` and a plain abort are the browser's transient "try again" answers. A full
+ * disk (`QuotaExceededError`) or a refusal is not transient, and retrying would only delay
+ * telling the person.
+ */
+function isTransient(error: unknown): boolean {
+  const name = (error as { name?: string } | null)?.name;
+  return (
+    name === "InvalidStateError" ||
+    name === "TransactionInactiveError" ||
+    name === "UnknownError" ||
+    name === "AbortError"
+  );
+}
+
+const TRANSACT_ATTEMPTS = 3;
+
+function transactOnce<T>(
+  names: StoreName[],
   mode: IDBTransactionMode,
   run: (stores: IDBObjectStore[]) => void | IDBRequest<T>,
 ): Promise<T | void> {
-  const names = Array.isArray(storeNames) ? storeNames : [storeNames];
   return openDatabase().then(
     (db) =>
       new Promise<T | void>((resolve, reject) => {
-        const transaction = db.transaction(names, mode);
+        let transaction: IDBTransaction;
+        try {
+          transaction = db.transaction(names, mode);
+        } catch (error) {
+          // The connection is closing; drop the handle so a retry opens a fresh one.
+          dbPromise = null;
+          reject(error);
+          return;
+        }
         const stores = names.map((name) => transaction.objectStore(name));
         let request: IDBRequest<T> | void;
         try {
           request = run(stores);
         } catch (error) {
+          try {
+            transaction.abort();
+          } catch {
+            // Already finished.
+          }
           reject(error);
           return;
         }
         transaction.oncomplete = () =>
           resolve(request && "result" in request ? request.result : undefined);
         transaction.onerror = () => reject(transaction.error);
-        transaction.onabort = () => reject(transaction.error);
+        transaction.onabort = () =>
+          reject(transaction.error ?? new DOMException("The save was interrupted", "AbortError"));
       }),
   );
+}
+
+async function transact<T>(
+  storeNames: StoreName | StoreName[],
+  mode: IDBTransactionMode,
+  run: (stores: IDBObjectStore[]) => void | IDBRequest<T>,
+): Promise<T | void> {
+  const names = Array.isArray(storeNames) ? storeNames : [storeNames];
+  let lastError: unknown;
+  for (let attempt = 0; attempt < TRANSACT_ATTEMPTS; attempt += 1) {
+    try {
+      return await transactOnce(names, mode, run);
+    } catch (error) {
+      lastError = error;
+      if (!isTransient(error) || attempt === TRANSACT_ATTEMPTS - 1) break;
+      await new Promise((resolve) => setTimeout(resolve, 120 * 3 ** attempt));
+    }
+  }
+  throw lastError;
+}
+
+/* ------------------------------------------------------------ write health */
+
+/**
+ * Changes the screen shows that the disk does not have yet.
+ *
+ * Edits are applied to memory first and written in the background, so a write that fails
+ * (disk full, storage blocked, the database closed by another tab) would otherwise be lost
+ * on the next reload without anyone being told. Each keyed write is tracked here instead:
+ *
+ * - every write takes a sequence number per record, so only the *latest* intended value
+ *   for a record is ever remembered or cleared, whatever order attempts finish in;
+ * - a failed write leaves its records here, and `retryUnsaved` writes them again;
+ * - a later successful write of the same record clears it.
+ *
+ * Put and delete are idempotent, so replaying them is always safe.
+ */
+const DELETE: unique symbol = Symbol("delete");
+type WriteValue = unknown;
+interface Pending {
+  store: StoreName;
+  key: IDBValidKey;
+  value: WriteValue;
+  seq: number;
+}
+
+const unsaved = new Map<string, Pending>();
+const latestSeq = new Map<string, number>();
+let sequence = 0;
+let inFlight = 0;
+let lastFailure: WriteFailureKind | null = null;
+
+export type WriteFailureKind = "quota" | "blocked" | "other";
+
+export interface WriteHealth {
+  /** Records whose latest change is not on disk. */
+  unsaved: number;
+  /** Writes currently running. */
+  inFlight: number;
+  /** Why the most recent failure happened, while anything is unsaved. */
+  failure: WriteFailureKind | null;
+}
+
+const healthListeners = new Set<(health: WriteHealth) => void>();
+
+export function writeHealth(): WriteHealth {
+  return { unsaved: unsaved.size, inFlight, failure: unsaved.size ? lastFailure : null };
+}
+
+export function subscribeWriteHealth(listener: (health: WriteHealth) => void): () => void {
+  healthListeners.add(listener);
+  return () => {
+    healthListeners.delete(listener);
+  };
+}
+
+function emitHealth(): void {
+  const health = writeHealth();
+  for (const listener of healthListeners) {
+    try {
+      listener(health);
+    } catch {
+      // A listener's own bug must not break persistence.
+    }
+  }
+}
+
+export function classifyWriteFailure(error: unknown): WriteFailureKind {
+  const name = (error as { name?: string } | null)?.name ?? "";
+  const message = String((error as { message?: string } | null)?.message ?? "");
+  if (name === "QuotaExceededError" || /quota/i.test(message)) return "quota";
+  if (error instanceof StorageUnavailableError || name === "SecurityError" || name === "NotAllowedError") {
+    return "blocked";
+  }
+  return "other";
+}
+
+/** Marks an error as already shown to the person, so the global handler stays quiet. */
+export function markReported<T>(error: T): T {
+  if (error && typeof error === "object") {
+    try {
+      Object.defineProperty(error, "bsReported", { value: true });
+    } catch {
+      // A frozen error is reported twice at worst.
+    }
+  }
+  return error;
+}
+
+export function isReported(error: unknown): boolean {
+  return Boolean(error && typeof error === "object" && (error as { bsReported?: boolean }).bsReported);
+}
+
+const recordId = (store: StoreName, key: IDBValidKey) => `${store}\u0000${String(key)}`;
+
+/**
+ * Writes keyed records with tracking. Rejects on failure (marked as reported), so callers
+ * that wait can react, and callers that don't are not shown a second, vaguer error.
+ */
+async function writeKeyed(store: StoreName, entries: { key: IDBValidKey; value: WriteValue }[]): Promise<void> {
+  if (!entries.length) return;
+  const stamped = entries.map((entry) => {
+    const id = recordId(store, entry.key);
+    sequence += 1;
+    latestSeq.set(id, sequence);
+    return { ...entry, id, seq: sequence };
+  });
+  inFlight += 1;
+  emitHealth();
+  try {
+    await transact(store, "readwrite", ([objectStore]) => {
+      for (const entry of stamped) {
+        if (entry.value === DELETE) objectStore.delete(entry.key);
+        else if (store === STORES.meta) objectStore.put(entry.value, entry.key);
+        else objectStore.put(entry.value);
+      }
+    });
+    for (const entry of stamped) {
+      if (latestSeq.get(entry.id) === entry.seq) {
+        unsaved.delete(entry.id);
+        latestSeq.delete(entry.id);
+      }
+    }
+  } catch (error) {
+    lastFailure = classifyWriteFailure(error);
+    for (const entry of stamped) {
+      if (latestSeq.get(entry.id) === entry.seq) {
+        unsaved.set(entry.id, { store, key: entry.key, value: entry.value, seq: entry.seq });
+      }
+    }
+    throw markReported(error);
+  } finally {
+    inFlight -= 1;
+    emitHealth();
+  }
+}
+
+let retrying: Promise<boolean> | null = null;
+
+/** Writes every unsaved change again. Resolves `true` when nothing is left unsaved. */
+export function retryUnsaved(): Promise<boolean> {
+  if (retrying) return retrying;
+  retrying = (async () => {
+    try {
+      const byStore = new Map<StoreName, Pending[]>();
+      for (const pending of unsaved.values()) {
+        const list = byStore.get(pending.store) ?? [];
+        list.push(pending);
+        byStore.set(pending.store, list);
+      }
+      for (const [store, list] of byStore) {
+        await writeKeyed(
+          store,
+          list.map((pending) => ({ key: pending.key, value: pending.value })),
+        ).catch(() => undefined);
+      }
+      return unsaved.size === 0;
+    } finally {
+      retrying = null;
+    }
+  })();
+  return retrying;
+}
+
+/** Test hook. */
+export function resetWriteHealth(): void {
+  unsaved.clear();
+  latestSeq.clear();
+  inFlight = 0;
+  lastFailure = null;
 }
 
 function readAll<T>(storeName: StoreName): Promise<T[]> {
@@ -459,6 +697,7 @@ export async function loadFirstPage(limit: number): Promise<Bookmark[]> {
     }
 
     const rows: Bookmark[] = [];
+    const report: RepairReport = { repaired: 0, dropped: 0 };
     const range = IDBKeyRange.bound(["live", -Infinity], ["live", Infinity]);
     // `prev` because the default view is newest-first, and reading the oldest rows first
     // would mean sorting before anything could be shown — which is the work being avoided.
@@ -466,10 +705,12 @@ export async function loadFirstPage(limit: number): Promise<Bookmark[]> {
     request.onsuccess = () => {
       const cursor = request.result;
       if (!cursor || rows.length >= limit) {
+        noteRepairs("first-page", report);
         resolve(rows);
         return;
       }
-      rows.push(unstamp(cursor.value as StoredBookmark));
+      const row = unstamp(cursor.value as StoredBookmark, report);
+      if (row) rows.push(row);
       cursor.continue();
     };
     request.onerror = () => resolve([]);
@@ -480,10 +721,13 @@ export async function loadFirstPage(limit: number): Promise<Bookmark[]> {
 export async function loadRest(exclude: Set<string>): Promise<Bookmark[]> {
   const all = await readAll<StoredBookmark>(STORES.bookmarks);
   const rest: Bookmark[] = [];
+  const report: RepairReport = { repaired: 0, dropped: 0 };
   for (const row of all) {
-    if (exclude.has(row.id)) continue;
-    rest.push(unstamp(row));
+    if (row && typeof row === "object" && exclude.has(row.id)) continue;
+    const repaired = unstamp(row, report);
+    if (repaired) rest.push(repaired);
   }
+  noteRepairs("library", report);
   return rest;
 }
 
@@ -496,13 +740,28 @@ export async function loadShell(): Promise<Omit<Snapshot, "bookmarks">> {
     readAll<Source>(STORES.sources),
     readAll<SmartCollection>(STORES.smart),
   ]);
-  return {
-    folders,
-    boards,
-    imports: imports.sort((a, b) => b.at - a.at),
-    sources: sources.sort((a, b) => a.createdAt - b.createdAt),
-    smart: smart.sort((a, b) => Number(b.pinned ?? false) - Number(a.pinned ?? false) || a.createdAt - b.createdAt),
+  const report: RepairReport = { repaired: 0, dropped: 0 };
+  const identified = <T>(rows: T[]): T[] =>
+    rows.filter((row) => {
+      const ok = Boolean(row && typeof row === "object" && typeof (row as { id?: unknown }).id === "string");
+      if (!ok) report.dropped += 1;
+      return ok;
+    });
+  // Sorting on a missing number would compare NaN and order rows unpredictably.
+  const num = (value: unknown) => (typeof value === "number" && Number.isFinite(value) ? value : 0);
+  const shell = {
+    folders: repairFolders(folders, report),
+    boards: identified(boards).map((board) =>
+      typeof board.name === "string" ? board : { ...board, name: "Untitled board" },
+    ),
+    imports: identified(imports).sort((a, b) => num(b.at) - num(a.at)),
+    sources: identified(sources).sort((a, b) => num(a.createdAt) - num(b.createdAt)),
+    smart: identified(smart).sort(
+      (a, b) => Number(b.pinned ?? false) - Number(a.pinned ?? false) || num(a.createdAt) - num(b.createdAt),
+    ),
   };
+  noteRepairs("shell", report);
+  return shell;
 }
 
 export async function loadSnapshot(): Promise<Snapshot> {
@@ -510,7 +769,14 @@ export async function loadSnapshot(): Promise<Snapshot> {
     readAll<StoredBookmark>(STORES.bookmarks),
     loadShell(),
   ]);
-  return { bookmarks: rows.map(unstamp), ...shell };
+  const report: RepairReport = { repaired: 0, dropped: 0 };
+  const bookmarks: Bookmark[] = [];
+  for (const row of rows) {
+    const repaired = unstamp(row, report);
+    if (repaired) bookmarks.push(repaired);
+  }
+  noteRepairs("snapshot", report);
+  return { bookmarks, ...shell };
 }
 
 /**
@@ -539,19 +805,29 @@ export async function replaceAll(snapshot: Snapshot): Promise<void> {
       for (const collection of snapshot.smart) smart.put(collection);
     },
   );
+  const replaced = new Set<StoreName>([
+    STORES.bookmarks,
+    STORES.folders,
+    STORES.boards,
+    STORES.imports,
+    STORES.sources,
+    STORES.smart,
+  ]);
+  for (const [id, pending] of unsaved) {
+    if (replaced.has(pending.store)) {
+      unsaved.delete(id);
+      latestSeq.delete(id);
+    }
+  }
+  emitHealth();
 }
 
 export async function putSources(sources: Source[]): Promise<void> {
-  if (!sources.length) return;
-  await transact(STORES.sources, "readwrite", ([store]) => {
-    for (const source of sources) store.put(source);
-  });
+  await writeKeyed(STORES.sources, sources.map((source) => ({ key: source.id, value: source })));
 }
 
 export async function deleteSource(id: string): Promise<void> {
-  await transact(STORES.sources, "readwrite", ([store]) => {
-    store.delete(id);
-  });
+  await writeKeyed(STORES.sources, [{ key: id, value: DELETE }]);
 }
 
 /* ---------------------------------------------------- smart collections -- */
@@ -561,70 +837,46 @@ export function loadSmartCollections(): Promise<SmartCollection[]> {
 }
 
 export async function putSmartCollections(collections: SmartCollection[]): Promise<void> {
-  if (!collections.length) return;
-  await transact(STORES.smart, "readwrite", ([store]) => {
-    for (const collection of collections) store.put(collection);
-  });
+  await writeKeyed(STORES.smart, collections.map((collection) => ({ key: collection.id, value: collection })));
 }
 
 export async function deleteSmartCollection(id: string): Promise<void> {
-  await transact(STORES.smart, "readwrite", ([store]) => {
-    store.delete(id);
-  });
+  await writeKeyed(STORES.smart, [{ key: id, value: DELETE }]);
 }
 
 export async function putImports(batches: ImportBatch[]): Promise<void> {
-  if (!batches.length) return;
-  await transact(STORES.imports, "readwrite", ([store]) => {
-    for (const batch of batches) store.put(batch);
-  });
+  await writeKeyed(STORES.imports, batches.map((batch) => ({ key: batch.id, value: batch })));
 }
 
 export async function deleteImport(id: string): Promise<void> {
-  await transact(STORES.imports, "readwrite", ([store]) => {
-    store.delete(id);
-  });
+  await writeKeyed(STORES.imports, [{ key: id, value: DELETE }]);
 }
 
 export async function putBookmarks(bookmarks: Bookmark[]): Promise<void> {
-  if (!bookmarks.length) return;
-  await transact(STORES.bookmarks, "readwrite", ([store]) => {
-    for (const bookmark of bookmarks) store.put(stampState(bookmark));
-  });
+  await writeKeyed(
+    STORES.bookmarks,
+    bookmarks.map((bookmark) => ({ key: bookmark.id, value: stampState(bookmark) })),
+  );
 }
 
 export async function deleteBookmarks(ids: string[]): Promise<void> {
-  if (!ids.length) return;
-  await transact(STORES.bookmarks, "readwrite", ([store]) => {
-    for (const id of ids) store.delete(id);
-  });
+  await writeKeyed(STORES.bookmarks, ids.map((id) => ({ key: id, value: DELETE })));
 }
 
 export async function putFolders(folders: Folder[]): Promise<void> {
-  if (!folders.length) return;
-  await transact(STORES.folders, "readwrite", ([store]) => {
-    for (const folder of folders) store.put(folder);
-  });
+  await writeKeyed(STORES.folders, folders.map((folder) => ({ key: folder.id, value: folder })));
 }
 
 export async function deleteFolders(ids: string[]): Promise<void> {
-  if (!ids.length) return;
-  await transact(STORES.folders, "readwrite", ([store]) => {
-    for (const id of ids) store.delete(id);
-  });
+  await writeKeyed(STORES.folders, ids.map((id) => ({ key: id, value: DELETE })));
 }
 
 export async function putBoards(boards: Board[]): Promise<void> {
-  if (!boards.length) return;
-  await transact(STORES.boards, "readwrite", ([store]) => {
-    for (const board of boards) store.put(board);
-  });
+  await writeKeyed(STORES.boards, boards.map((board) => ({ key: board.id, value: board })));
 }
 
 export async function deleteBoard(id: string): Promise<void> {
-  await transact(STORES.boards, "readwrite", ([store]) => {
-    store.delete(id);
-  });
+  await writeKeyed(STORES.boards, [{ key: id, value: DELETE }]);
 }
 
 export async function clearLibrary(): Promise<void> {
@@ -648,9 +900,7 @@ export async function getMeta<T>(key: string): Promise<T | undefined> {
 }
 
 export async function setMeta(key: string, value: unknown): Promise<void> {
-  await transact(STORES.meta, "readwrite", ([store]) => {
-    store.put(value, key);
-  });
+  await writeKeyed(STORES.meta, [{ key, value }]);
 }
 
 /** Activity log — newest first, trimmed so it cannot grow without bound. */
@@ -735,8 +985,12 @@ export async function clearActivity(): Promise<void> {
 }
 
 export async function loadSettings(): Promise<Settings> {
-  const stored = await getMeta<Partial<Settings>>("settings");
-  return { ...DEFAULT_SETTINGS, ...(stored ?? {}) };
+  const stored = await getMeta<unknown>("settings").catch((error: unknown) => {
+    // Unreadable settings must not stop the library opening; the defaults are safe.
+    log.warn("storage.settings-unreadable", { error });
+    return undefined;
+  });
+  return repairSettings(stored);
 }
 
 export async function saveSettings(settings: Settings): Promise<void> {

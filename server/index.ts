@@ -14,6 +14,7 @@ import type { Server } from "node:http";
 import { createApiApp } from "./app";
 import { portFromEnv } from "./config";
 import { shutdown as shutdownScreenshots } from "./screenshot";
+import { logEvent } from "./log";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const isProduction = process.env.NODE_ENV === "production";
@@ -99,7 +100,16 @@ const server: Server = app.listen(port, host, () => {
 });
 
 server.on("error", (error) => {
-  console.error("[bookmark-studio] failed to start", error);
+  const code = (error as { code?: string }).code;
+  // Say what to do about the two failures people actually hit.
+  const hint =
+    code === "EADDRINUSE"
+      ? `Port ${port} is already in use. Close the other program, or start with PORT=<another number>.`
+      : code === "EACCES"
+        ? `Not allowed to listen on port ${port}. Choose a port above 1024 with PORT=<number>.`
+        : undefined;
+  logEvent("error", "server.start-failed", { error, hint });
+  if (hint) console.error(`[bookmark-studio] ${hint}`);
   process.exit(1);
 });
 
@@ -146,10 +156,10 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
  * in-progress capture sweep to one unhandled edge case.
  */
 process.on("unhandledRejection", (reason) => {
-  console.error("[bookmark-studio] unhandled rejection", reason);
+  logEvent("error", "process.unhandled-rejection", { error: reason });
 });
 
 process.on("uncaughtException", (error) => {
-  console.error("[bookmark-studio] uncaught exception", error);
+  logEvent("error", "process.uncaught-exception", { error });
   void stop("uncaughtException");
 });

@@ -9,6 +9,7 @@
  */
 import dns from "node:dns/promises";
 import net from "node:net";
+import { createBreaker } from "./breaker";
 
 export const USER_AGENT =
   "Mozilla/5.0 (compatible; SmartBookmarkStudio/2.0; +local bookmark manager)";
@@ -89,6 +90,12 @@ export async function assertPublicUrl(rawUrl: string): Promise<URL> {
   return url;
 }
 
+/**
+ * Per-site breaker: five connection failures to one host inside two minutes and that host
+ * is skipped for a minute. See `breaker.ts`. Exported for tests and diagnostics.
+ */
+export const hostBreaker = createBreaker({ threshold: 5, windowMs: 120_000, coolOffMs: 60_000 });
+
 export interface FollowResult {
   response: Response;
   finalUrl: string;
@@ -109,6 +116,8 @@ export async function followedFetch(
 
   for (let hop = 0; hop <= MAX_REDIRECTS; hop += 1) {
     const url = await assertPublicUrl(current);
+    const host = url.hostname.toLowerCase();
+    hostBreaker.check(host);
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     let response: Response;
@@ -124,6 +133,12 @@ export async function followedFetch(
           ...(requestInit.headers as Record<string, string> | undefined),
         },
       });
+      // Any HTTP answer, even a 404 or 500, means the site is reachable.
+      hostBreaker.success(host);
+    } catch (error) {
+      // A timeout, refused connection or failed lookup: the site did not answer at all.
+      hostBreaker.failure(host);
+      throw error;
     } finally {
       clearTimeout(timer);
     }

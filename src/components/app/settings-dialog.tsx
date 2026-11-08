@@ -11,6 +11,7 @@
  * in the last section.
  */
 import { useEffect, useState, type ReactNode } from "react";
+import { toast } from "sonner";
 
 import type { ActivityEntry, DeviceName, Settings, SortMode, ViewMode } from "@shared/types";
 import {
@@ -41,7 +42,9 @@ import { Badge, Progress } from "@/components/ui/primitives";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import type { ThemePreference } from "@/hooks/useTheme";
 import { assetStats, clearAssets } from "@/lib/assets";
+import { writeHealth } from "@/lib/db";
 import { APP_VERSION, EXTENSION_STORE_URL, IS_EXTENSION, REPOSITORY_URL } from "@/lib/env";
+import { diagnosticsReport } from "@/lib/log";
 import { formatRelative } from "@/lib/library";
 import { requestBridgeAccess } from "@/lib/bridge";
 import { describeRuntime, type RuntimeState } from "@/lib/runtime";
@@ -684,7 +687,7 @@ export function SettingsDialog({
               <Row label="Where your data lives" hint="In this browser’s storage (IndexedDB) — nowhere else. No account, no sync service, no analytics.">
                 <Shield className="text-text-3" />
               </Row>
-              <Row label="No AI" hint="Categories come from rules, tags from term statistics, “similar” from TF-IDF, look-alikes from perceptual hashes.">
+              <Row label="No AI" hint="Categories come from rules, tags from a list of topics, “similar” from TF-IDF, look-alikes from perceptual hashes.">
                 <Sparkles className="text-text-3" />
               </Row>
               <Row label="Source code" hint="Report a bug, suggest a feature or read how it works.">
@@ -696,6 +699,27 @@ export function SettingsDialog({
               </Row>
               <Row label="Running as" hint={status.detail}>
                 <Badge variant="outline">{IS_EXTENSION ? "Extension" : runtime.server ? "Local server" : "Website"}</Badge>
+              </Row>
+              <Row
+                label="Diagnostics"
+                hint="Recent events and errors, for a bug report. Web addresses are cut to the site name, so it never lists your bookmarks."
+              >
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => {
+                    const report = diagnosticsReport({
+                      runningAs: IS_EXTENSION ? "extension" : runtime.server ? "local server" : "website",
+                      unsavedChanges: writeHealth().unsaved,
+                    });
+                    void navigator.clipboard
+                      .writeText(report)
+                      .then(() => toast.success("Diagnostics copied", { description: "Paste them into your bug report." }))
+                      .catch(() => toast.error("Could not copy to the clipboard", { description: "Your browser blocked it." }));
+                  }}
+                >
+                  Copy diagnostics
+                </Button>
               </Row>
             </section>
           ) : null}

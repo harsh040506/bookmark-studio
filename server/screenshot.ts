@@ -23,6 +23,8 @@ import os from "node:os";
 import path from "node:path";
 import puppeteer, { type Browser, type Page } from "puppeteer-core";
 import { intFromEnv } from "./config";
+import { createBreaker } from "./breaker";
+import { logEvent } from "./log";
 import { ABSOLUTE_MAX_TABS, createTabPool, TabPoolTimeout } from "./tab-pool";
 import { assertPublicUrl, isPrivateAddress } from "./safe-fetch";
 
@@ -184,13 +186,35 @@ const LAUNCH_ARGS = [
   "--disable-extensions",
 ];
 
+/**
+ * Launch breaker: three failed starts in two minutes and launching is paused for one.
+ *
+ * Without it, a broken or missing browser makes every queued capture attempt its own
+ * launch and wait out the failure, so a sweep of a thousand pages spends its time
+ * restarting Chrome. While open, captures fail at once with a plain explanation.
+ */
+const launchBreaker = createBreaker({ threshold: 3, windowMs: 120_000, coolOffMs: 60_000 });
+
 /** The one browser process and its tabs. See `tab-pool.ts` for the guarantees. */
 const pool = createTabPool<Browser, Page>(
   {
     launch: async () => {
       const executablePath = findChrome();
       if (!executablePath) throw new ScreenshotUnavailable("No Chrome or Edge installation found");
-      return puppeteer.launch({ executablePath, headless: true, args: LAUNCH_ARGS });
+      try {
+        launchBreaker.check("chrome");
+      } catch {
+        throw new ScreenshotUnavailable("The browser used for previews is not starting; trying again shortly");
+      }
+      try {
+        const browser = await puppeteer.launch({ executablePath, headless: true, args: LAUNCH_ARGS });
+        launchBreaker.success("chrome");
+        return browser;
+      } catch (error) {
+        launchBreaker.failure("chrome");
+        logEvent("error", "screenshot.launch-failed", { error });
+        throw new ScreenshotUnavailable("The browser used for previews could not start");
+      }
     },
     openTab: (browser) => browser.newPage(),
     closeTab: (page) => page.close(),

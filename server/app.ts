@@ -13,6 +13,7 @@
  */
 import express, { type Express, type NextFunction, type Request, type Response } from "express";
 import { api } from "./routes";
+import { logEvent, newReference } from "./log";
 
 /**
  * Body-size ceiling for API requests.
@@ -99,7 +100,7 @@ function sameSiteOnly(req: Request, res: Response, next: NextFunction): void {
   next();
 }
 
-function errorHandler(error: unknown, _req: Request, res: Response, next: NextFunction): void {
+function errorHandler(error: unknown, req: Request, res: Response, next: NextFunction): void {
   if (res.headersSent) {
     // The response is already streaming; only the connection can be closed now.
     next(error);
@@ -119,8 +120,10 @@ function errorHandler(error: unknown, _req: Request, res: Response, next: NextFu
     return;
   }
 
-  console.error("[bookmark-studio] unhandled error", error);
-  res.status(500).json({ error: "Something went wrong on the server" });
+  // The person gets a plain message and a reference; the details stay in the server log.
+  const reference = newReference();
+  logEvent("error", "http.unhandled", { reference, method: req.method, path: req.path, error });
+  res.status(500).json({ error: "Something went wrong on the server", reference });
 }
 
 export function createApiApp(): Express {

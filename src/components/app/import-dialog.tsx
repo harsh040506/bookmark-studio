@@ -32,6 +32,7 @@ import {
   Upload,
 } from "@/components/icons";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { toast } from "sonner";
 
 import {
   ACCEPTED_EXTENSIONS,
@@ -61,6 +62,9 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { MAX_IMPORT_BYTES } from "@/lib/import";
+import { readImportText } from "@/lib/import/read-text";
+import { log } from "@/lib/log";
 import { cn, formatBytes } from "@/lib/utils";
 
 type Step = "file" | "source" | "columns" | "review";
@@ -152,11 +156,22 @@ export function ImportDialog(props: ImportDialogProps) {
    * text and a 90 MB export must not be read three times.
    */
   const accept = useCallback(async (chosen: File) => {
+    // Checked before reading: a multi-gigabyte file read into a tab can crash it.
+    if (chosen.size > MAX_IMPORT_BYTES) {
+      toast.error("That file is too large to import here", {
+        description: `The limit is ${formatBytes(MAX_IMPORT_BYTES)}. Export a smaller part of your library, or split the file.`,
+      });
+      return;
+    }
+    if (chosen.size === 0) {
+      toast.error("That file is empty", { description: "Export your bookmarks again and choose the new file." });
+      return;
+    }
     setReading(true);
     setFile(chosen);
     setLabel(chosen.name.replace(/\.[^.]+$/, ""));
     try {
-      const body = await chosen.text();
+      const { text: body } = await readImportText(chosen);
       setText(body);
       const input = detectInput(chosen.name, body.slice(0, 64 * 1024), chosen.size);
       const ranked = detectSources(input);
@@ -170,7 +185,12 @@ export function ImportDialog(props: ImportDialogProps) {
         setColumns(guessColumns(found, guess.csv));
       }
       setStep("source");
-    } catch {
+    } catch (error) {
+      // Typically the file was moved, deleted or locked after it was chosen.
+      log.warn("import.read-failed", { error, size: chosen.size });
+      toast.error("That file could not be read", {
+        description: "It may have been moved, deleted or still be open in another program. Try choosing it again.",
+      });
       setFile(null);
       setStep("file");
     } finally {

@@ -14,6 +14,7 @@
  */
 import type { Bookmark, Folder } from "../../../shared/types";
 import { buildExistingIndex, normalizeItems } from "./normalize";
+import { readImportText } from "./read-text";
 import { parseBest, parseWith, type ParseOptions } from "./parsers";
 import type { ColumnMap } from "./parsers/csv";
 import type { ImportRequest, ImportResponse } from "./import.worker";
@@ -127,7 +128,7 @@ export async function runImport(options: RunImportOptions): Promise<ImportOutcom
   options.onProgress?.({ phase: "reading", done: 0, total: options.file.size });
   let text: string;
   try {
-    text = options.text ?? (await options.file.text());
+    text = options.text ?? (await readImportText(options.file)).text;
   } catch {
     return FAILED(parsers[0], "The file could not be read from disk.");
   }

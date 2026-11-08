@@ -170,6 +170,7 @@ All optional.
 | `SCREENSHOT_CONCURRENCY` | `3` | Pages loaded at once in the single headless browser (1–5; never more than 5) |
 | `SCREENSHOT_RECYCLE_AFTER` | `150` | Captures before the headless browser is closed and restarted, to keep memory flat on long runs |
 | `SCREENSHOT_CACHE_MAX_BYTES` | `536870912` (512 MB) | Disk ceiling for the preview cache |
+| `LOG_LEVEL` | `info` | `debug`, `info`, `warn` or `error`. Logs are one JSON object per line, with web addresses cut to the site name |
 | `NO_OPEN` | unset | Set to `1` to stop `npm start` opening a browser |
 
 Contributions are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) first.

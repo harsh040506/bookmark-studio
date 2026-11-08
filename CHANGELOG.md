@@ -7,6 +7,14 @@
 - The extension closes every capture window before starting another, and closes windows left behind if Chrome stops its background worker mid-capture. The page sends at most five capture requests at a time.
 - Suggested tags now name real topics (`design`, `typography`, `ai`, …). Earlier versions split folder names and titles into words, so a folder called "Everything Else & Stuff" became the tags `everything`, `else` and `stuff`. Existing libraries are cleaned up once on first load; tags you added yourself are kept.
 
+### Reliability
+- Changes the device refuses to store (a full disk, storage blocked, the database closed by another tab) are no longer lost silently. Brief failures are retried; lasting ones show a plain message with **Try again**, are retried automatically when the tab regains focus or the network returns, and the browser asks before closing a tab that still has unsaved changes. An older failed change can never overwrite a newer one.
+- Records read back from storage are repaired to the current shape instead of crashing the app. A folder whose parent is missing, or two folders that name each other as parent, move to the top level instead of disappearing from the tree. Unreadable or wrong-typed settings fall back to the defaults.
+- Import reads UTF-16 files (Excel's "Unicode Text", many Windows tools) and legacy Windows-1252 files correctly, refuses empty and oversized files before reading them, and says so when a file cannot be read.
+- The local server skips a site for a minute after it stops answering, instead of waiting out a timeout for every link on it, and pauses Chrome launches after repeated failures. Server errors carry a short reference that matches the log, without exposing details. A busy port is explained when the server starts.
+- A change that cannot be copied to Chrome's bookmarks is reported, since the next sync would otherwise undo it without explanation.
+- Settings → About → **Copy diagnostics** copies recent events for a bug report, with web addresses cut to the site name. The crash screen offers the same, and warns about unsaved changes before a reload.
+
 ### Interface
 - Import: the sources that match the file are listed first, the list is a keyboard-friendly radio group, the Import button stays visible however long the step is, and a loaded sample library can be removed as part of a real import.
 - Light favicons (white logos) sit on a dark chip, so they no longer show as blank squares. Cards without a preview show a larger icon.

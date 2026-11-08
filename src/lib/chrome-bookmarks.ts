@@ -39,6 +39,7 @@ import { isVideoUrl, thumbnailUrl } from "./embeds";
 import { bookmarksApi, type BookmarksApi } from "./bookmarks-api";
 import { IS_EXTENSION } from "./env";
 import { buildFolderPaths } from "./library";
+import { log } from "./log";
 import { getDomain } from "./text";
 
 /** Chrome's fixed root folder ids. Stable across every profile and platform. */
@@ -253,6 +254,38 @@ export async function reconcile(
 
 /* ------------------------------------------------------------- write-back */
 
+export type MirrorOperation = "create" | "update" | "move" | "remove" | "create-folder" | "rename-folder" | "remove-folder";
+
+const mirrorListeners = new Set<(operation: MirrorOperation) => void>();
+
+/**
+ * Hears about changes that could not be copied to Chrome's bookmarks.
+ *
+ * They matter more than they look: a delete that never reached Chrome is undone by the next
+ * sync, which reads to the person as the app bringing a bookmark back on its own.
+ */
+export function onMirrorFailure(listener: (operation: MirrorOperation) => void): () => void {
+  mirrorListeners.add(listener);
+  return () => {
+    mirrorListeners.delete(listener);
+  };
+}
+
+/** "Can't find bookmark for id": the node is already gone, which is what a removal wanted. */
+const isMissingNode = (error: unknown) => /can.?t find|not found|no node/i.test(String((error as Error)?.message ?? error));
+
+function mirrorFailed(operation: MirrorOperation, error: unknown): void {
+  if ((operation === "remove" || operation === "remove-folder") && isMissingNode(error)) return;
+  log.warn("chrome-sync.write-back-failed", { operation, error });
+  for (const listener of mirrorListeners) {
+    try {
+      listener(operation);
+    } catch {
+      // A listener's bug must not break sync.
+    }
+  }
+}
+
 /**
  * Creates a bookmark in Chrome and returns its real id, or `null` if Chrome bookmarks are
  * unavailable or the call failed — callers fall back to a locally-generated id, so a
@@ -268,7 +301,8 @@ export async function createBookmarkNode(
     const node = await api().create({ parentId: toChromeParentId(folderId), title, url });
     markPending(node.id);
     return node.id;
-  } catch {
+  } catch (error) {
+    mirrorFailed("create", error);
     return null;
   }
 }
@@ -282,19 +316,21 @@ export async function createBookmarkNode(
 export async function updateBookmarkNode(id: string, changes: { title?: string; url?: string }): Promise<void> {
   if (!isChromeBookmarksAvailable()) return;
   markPending(id);
-  await api().update(id, changes).catch(() => undefined);
+  await api().update(id, changes).catch((error: unknown) => mirrorFailed("update", error));
 }
 
 export async function moveBookmarkNode(id: string, folderId: string | null): Promise<void> {
   if (!isChromeBookmarksAvailable()) return;
   markPending(id);
-  await api().move(id, { parentId: toChromeParentId(folderId) }).catch(() => undefined);
+  await api()
+    .move(id, { parentId: toChromeParentId(folderId) })
+    .catch((error: unknown) => mirrorFailed("move", error));
 }
 
 export async function removeBookmarkNode(id: string): Promise<void> {
   if (!isChromeBookmarksAvailable()) return;
   markPending(id);
-  await api().remove(id).catch(() => undefined);
+  await api().remove(id).catch((error: unknown) => mirrorFailed("remove", error));
 }
 
 export async function createFolderNode(parentId: string | null, title: string): Promise<string | null> {
@@ -303,7 +339,8 @@ export async function createFolderNode(parentId: string | null, title: string): 
     const node = await api().create({ parentId: toChromeParentId(parentId), title });
     markPending(node.id);
     return node.id;
-  } catch {
+  } catch (error) {
+    mirrorFailed("create-folder", error);
     return null;
   }
 }
@@ -311,7 +348,7 @@ export async function createFolderNode(parentId: string | null, title: string): 
 export async function renameFolderNode(id: string, title: string): Promise<void> {
   if (!isChromeBookmarksAvailable()) return;
   markPending(id);
-  await api().update(id, { title }).catch(() => undefined);
+  await api().update(id, { title }).catch((error: unknown) => mirrorFailed("rename-folder", error));
 }
 
 /**
@@ -325,7 +362,7 @@ export async function renameFolderNode(id: string, title: string): Promise<void>
 export async function removeFolderNode(id: string): Promise<void> {
   if (!isChromeBookmarksAvailable()) return;
   markPending(id);
-  await api().removeTree(id).catch(() => undefined);
+  await api().removeTree(id).catch((error: unknown) => mirrorFailed("remove-folder", error));
 }
 
 /* ---------------------------------------------------------------- live sync */

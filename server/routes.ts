@@ -50,6 +50,7 @@ import {
   pruneCache,
   readCached,
 } from "./screenshot";
+import { CircuitOpenError } from "./breaker";
 
 export const api = Router();
 
@@ -498,6 +499,7 @@ function isSafeHttpUrl(value: unknown): value is string {
  */
 function describeFetchFailure(error: unknown): string {
   if (error instanceof BlockedUrlError) return error.message;
+  if (error instanceof CircuitOpenError) return "Site not responding";
   if (error instanceof Error && error.name === "AbortError") return "Timed out";
   if (error instanceof Error && /ENOTFOUND|EAI_AGAIN/.test(error.message)) {
     return "Domain does not resolve";
@@ -562,7 +564,9 @@ async function checkOne(url: string): Promise<HealthResult> {
         elapsedMs: Date.now() - started,
         error: describeFetchFailure(error),
       };
-      healthCache.set(url, result);
+      // A skip by the breaker is not a real check, so it is not remembered: the next sweep
+      // after the cool-off asks the site itself.
+      if (!(error instanceof CircuitOpenError)) healthCache.set(url, result);
       return result;
     }
   });

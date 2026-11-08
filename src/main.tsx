@@ -13,9 +13,11 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import App from "./App";
 import { ErrorBoundary } from "./components/ErrorBoundary";
+import { writeHealth } from "./lib/db";
 import { IS_EXTENSION } from "./lib/env";
 import { setGuardedTransport } from "./lib/net-guard";
 import { probeRuntime, watchRuntime } from "./lib/runtime";
+import { log } from "./lib/log";
 import { netFetch } from "./lib/transport";
 
 // The design system's three open-source faces, bundled rather than fetched from a font CDN.
@@ -36,6 +38,16 @@ if (!container) {
 // extension when one is connected (inside the extension, a plain fetch is already allowed).
 if (!IS_EXTENSION) setGuardedTransport((url, init) => netFetch(url, init));
 
+/*
+  Closing the tab is the one moment a change the device refused to store is really lost.
+  Registered here, outside React, so it keeps working even if the interface has crashed.
+*/
+window.addEventListener("beforeunload", (event) => {
+  if (!writeHealth().unsaved) return;
+  event.preventDefault();
+  event.returnValue = "";
+});
+
 /**
  * Offline support for the website build: a small service worker caches the app shell so
  * the library opens with the network off. Never registered in the extension (which is
@@ -47,7 +59,7 @@ function registerServiceWorker(): void {
   const register = () => {
     navigator.serviceWorker.register(new URL("sw.js", document.baseURI), { scope: "./" }).catch((error: unknown) => {
       // Offline caching is an enhancement; the app works without it.
-      console.warn("[bookmark-studio] offline support unavailable", error);
+      log.warn("offline.sw-register-failed", { error });
     });
   };
   // The runtime probe usually finishes after `load` has fired, so register at once in that case.

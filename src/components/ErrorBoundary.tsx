@@ -27,6 +27,8 @@
 import { Component, type ErrorInfo, type ReactNode } from "react";
 
 import { Button } from "@/components/ui/button";
+import { retryUnsaved, subscribeWriteHealth, writeHealth } from "@/lib/db";
+import { diagnosticsReport, log } from "@/lib/log";
 
 interface Props {
   children: ReactNode;
@@ -38,18 +40,33 @@ interface State {
   error: Error | null;
   /** Bumped on every reset so children remount rather than resuming bad state. */
   generation: number;
+  /** Changes on screen that the device has not stored, so a reload would lose them. */
+  unsaved: number;
+  copied: boolean;
 }
 
 export class ErrorBoundary extends Component<Props, State> {
-  state: State = { error: null, generation: 0 };
+  state: State = { error: null, generation: 0, unsaved: 0, copied: false };
+  private unsubscribe?: () => void;
+
+  componentDidMount(): void {
+    this.unsubscribe = subscribeWriteHealth((health) => {
+      if (this.state.error) this.setState({ unsaved: health.unsaved });
+    });
+  }
+
+  componentWillUnmount(): void {
+    this.unsubscribe?.();
+  }
 
   static getDerivedStateFromError(error: Error): Partial<State> {
     return { error };
   }
 
   componentDidCatch(error: Error, info: ErrorInfo): void {
-    // The console is the only sink available: this app has no telemetry, by design.
-    console.error("[smart-bookmark-studio] render error", error, info.componentStack);
+    // The console and the local log are the only sinks: this app has no telemetry, by design.
+    log.error("ui.render-crash", { error, component: info.componentStack?.split("\n").slice(0, 4).join(" ") });
+    this.setState({ unsaved: writeHealth().unsaved });
     this.props.onError?.(error, info);
   }
 
@@ -58,7 +75,20 @@ export class ErrorBoundary extends Component<Props, State> {
   };
 
   private reload = (): void => {
+    // The unload guard in main.tsx asks first if anything is unsaved.
     window.location.reload();
+  };
+
+  private saveAgain = (): void => {
+    void retryUnsaved().then(() => this.setState({ unsaved: writeHealth().unsaved }));
+  };
+
+  private copyDiagnostics = (): void => {
+    const report = diagnosticsReport({ crash: this.state.error });
+    void navigator.clipboard
+      ?.writeText(report)
+      .then(() => this.setState({ copied: true }))
+      .catch(() => undefined);
   };
 
   render(): ReactNode {
@@ -75,15 +105,28 @@ export class ErrorBoundary extends Component<Props, State> {
         <h1 className="max-w-md font-heading text-[28px] leading-tight text-ink">
           The interface hit an error and stopped rendering
         </h1>
-        <p className="max-w-md text-base leading-relaxed text-text-2">
-          Your bookmarks are safe — they live in this browser's local database and were not
-          touched. Try again, or reload to start from the saved copy.
-        </p>
+        {this.state.unsaved ? (
+          <p className="max-w-md text-base leading-relaxed text-text-2" role="alert">
+            {this.state.unsaved === 1 ? "1 recent change has" : `${this.state.unsaved.toLocaleString()} recent changes have`} not
+            been saved to this device yet. Save them before reloading, or they will be lost.
+          </p>
+        ) : (
+          <p className="max-w-md text-base leading-relaxed text-text-2">
+            Your saved bookmarks are safe in this browser's local database and were not touched.
+            Try again, or reload to start from the saved copy.
+          </p>
+        )}
 
-        <div className="flex gap-2 pt-1">
-          <Button onClick={this.reset}>Try again</Button>
+        <div className="flex flex-wrap justify-center gap-2 pt-1">
+          {this.state.unsaved ? <Button onClick={this.saveAgain}>Save changes</Button> : null}
+          <Button variant={this.state.unsaved ? "outline" : "default"} onClick={this.reset}>
+            Try again
+          </Button>
           <Button variant="outline" onClick={this.reload}>
             Reload the app
+          </Button>
+          <Button variant="ghost" onClick={this.copyDiagnostics}>
+            {this.state.copied ? "Copied" : "Copy diagnostics"}
           </Button>
         </div>
 

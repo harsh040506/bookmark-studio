@@ -44,17 +44,32 @@ async function requestJson<T>(input: string, init?: RequestInit, timeoutMs = 30_
     if (!response.ok) {
       // Servers here answer failures as JSON with an `error`; use it when it is there,
       // because "Request failed: 503" tells a user nothing they can act on.
-      const detail = await response
+      const body = await response
         .clone()
         .json()
-        .then((body: { error?: string }) => body?.error)
+        .then((value: { error?: unknown; reference?: unknown }) => value)
         .catch(() => undefined);
-      throw new ApiError(detail ?? `Request failed: ${response.status}`, response.status);
+      const detail = typeof body?.error === "string" ? body.error : undefined;
+      const reference = typeof body?.reference === "string" ? ` (reference ${body.reference})` : "";
+      const fallback =
+        response.status === 429
+          ? "The local server is busy. It will catch up shortly."
+          : response.status >= 500
+            ? "The local server ran into a problem."
+            : `The request was refused (${response.status}).`;
+      throw new ApiError(`${detail ?? fallback}${reference}`, response.status);
     }
-    return (await response.json()) as T;
+    // A 200 that is not JSON is a proxy or error page in front of the server, not an answer.
+    return (await response.json().catch(() => {
+      throw new ApiError("The local server sent an answer the app could not read", response.status);
+    })) as T;
   } catch (error) {
     if (error instanceof DOMException && error.name === "AbortError") {
       throw new ApiError("The local server did not answer in time", 0);
+    }
+    if (error instanceof TypeError) {
+      // fetch() rejects with a TypeError when the connection itself fails.
+      throw new ApiError("The local server could not be reached. Is it still running?", 0);
     }
     throw error;
   } finally {
