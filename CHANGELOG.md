@@ -1,9 +1,18 @@
 # Changelog
 
-## Unreleased
+## 5.2.0
+
+### Background work
+- Background work carries on with no Bookmark Studio window open. Close the last window, or restart the browser, with pages still to read, and the extension finishes them in a hidden page, which closes itself once everything is done. Opening a window takes over from it. The switches in Settings → Background still decide what runs. Not yet in Firefox, which has no hidden pages for extensions; there the work resumes when a window opens.
+- Bookmarks added on the website while the extension is connected are filled in by the extension too, even with no extension window open.
+- Nothing runs in the background when there is nothing it could do: no page access yet, every pass switched off, or offline.
 
 ### Extension
-- Background work carries on with no Bookmark Studio window open. Close the last window, or restart the browser, with pages still to read, and the extension finishes them in a hidden page, which closes itself once everything is done. Opening a window takes over from it. The switches in Settings → Background still decide what runs. Not yet in Firefox, which has no hidden pages for extensions; there the work resumes when a window opens.
+- Two new permissions in Chromium browsers, `offscreen` and `alarms`, for the hidden page and a five-minute check that restarts it. Neither shows a warning, so updating does not ask again. The Firefox build leaves `offscreen` out.
+
+### Code
+- The hidden page is the app itself (`index.html?runner`), mounting the library hook with nothing drawn, so it reads, checks and saves exactly as a window does. When to open and close it is decided in `src/lib/background-runner.ts`, which is unit-tested.
+- The smoke test closes the last window with work left and checks that the hidden page opens, fills in a bookmark the window never saw, and closes itself.
 
 ## 5.1.0
 

@@ -235,7 +235,9 @@ describe("a large library", () => {
     await exchange();
     expect((await ext.loadSnapshot()).bookmarks).toHaveLength(1_200);
     expect(traffic.pulls).toBeGreaterThan(0);
-  });
+    // 1,200 rows through the in-memory database take seconds alone and longer beside the
+    // other test files, so the default 5 s limit fails on a busy machine, not on a bug.
+  }, 30_000);
 });
 
 describe("what the extension accepts from a website", () => {
