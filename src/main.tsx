@@ -12,9 +12,10 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import App from "./App";
+import { BackgroundRunner } from "./components/app/background-runner";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { writeHealth } from "./lib/db";
-import { IS_EXTENSION } from "./lib/env";
+import { IS_BACKGROUND_RUNNER, IS_EXTENSION } from "./lib/env";
 import { setGuardedTransport } from "./lib/net-guard";
 import { probeRuntime, watchRuntime } from "./lib/runtime";
 import { log } from "./lib/log";
@@ -94,9 +95,7 @@ void Promise.all([probeRuntime().catch(() => undefined), appStyles()])
     registerServiceWorker();
     createRoot(container).render(
       <ErrorBoundary>
-        <StrictMode>
-          <App />
-        </StrictMode>
+        <StrictMode>{IS_BACKGROUND_RUNNER ? <BackgroundRunner /> : <App />}</StrictMode>
       </ErrorBoundary>,
     );
   });

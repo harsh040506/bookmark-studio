@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+### Extension
+- Background work carries on with no Bookmark Studio window open. Close the last window, or restart the browser, with pages still to read, and the extension finishes them in a hidden page, which closes itself once everything is done. Opening a window takes over from it. The switches in Settings → Background still decide what runs. Not yet in Firefox, which has no hidden pages for extensions; there the work resumes when a window opens.
+
 ## 5.1.0
 
 ### One library

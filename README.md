@@ -134,6 +134,8 @@ For Chrome, Edge, Brave, Arc, Opera, Vivaldi and Firefox 128 or newer. It adds p
 
 Installing asks only for your bookmarks. Permission to read the pages in your library is asked for the first time it's needed, so the install prompt doesn't warn about access to every website.
 
+In Chrome and other Chromium browsers, the extension keeps filling in your library with no window open, even after the browser restarts, and stops once everything is done.
+
 **Chrome, Edge and other Chromium browsers:** [download the extension](https://bookmark-studio-app.vercel.app/bookmark-studio-extension.zip) (also in the app under **Settings → Connections**). Unzip it, open `chrome://extensions`, turn on **Developer mode**, and choose **Load unpacked**.
 
 **Firefox:** [download the Firefox build](https://bookmark-studio-app.vercel.app/bookmark-studio-extension-firefox.zip), open `about:debugging`, choose **This Firefox → Load Temporary Add-on**, and pick the zip. Firefox removes unsigned add-ons when it restarts, so this is for trying it out until a signed version is published.

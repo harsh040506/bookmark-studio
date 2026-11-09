@@ -230,6 +230,7 @@ export const PAGES = [
               "**Access to websites**, asked for the first time it is needed rather than at install, to read pages, check links and capture previews of the sites in your library. It does not read the pages you browse.",
               "**Tabs and scripting**, to capture a preview in a short-lived window when you ask for one (background capture windows are off unless you switch them on) and to connect to the Bookmark Studio website when it is open.",
               "**Storage**, so the library and its pictures are not cut off by the browser's default storage limit.",
+              "**Offscreen pages and alarms**, to finish reading and checking the pages in your library in a hidden page while no Bookmark Studio window is open, including after the browser restarts. It stops once everything is done, and follows the switches in **Settings → Background**.",
             ],
           },
         ],

@@ -138,6 +138,11 @@ let probing: Promise<RuntimeState> | null = null;
 /** Detects the backend. Safe to call repeatedly; concurrent calls share one probe. */
 async function extensionPageAccess(): Promise<boolean> {
   try {
+    // The hidden background runner only has `chrome.runtime`, so it asks the service worker.
+    if (!chrome.permissions) {
+      const answer = await chrome.runtime.sendMessage({ type: "page-access" });
+      return answer === true;
+    }
     return await chrome.permissions.contains({ origins: ["<all_urls>"] });
   } catch (error) {
     log.warn("runtime.permission-check-failed", { error });
@@ -188,6 +193,9 @@ export function watchRuntime(): void {
   if (watching || typeof window === "undefined") return;
   watching = true;
   if (IS_EXTENSION) {
+    // The hidden runner cannot watch permissions. Changing them happens in a window, and an
+    // open window takes over from the runner.
+    if (!chrome.permissions) return;
     try {
       chrome.permissions.onAdded.addListener(() => void probeRuntime());
       chrome.permissions.onRemoved.addListener(() => void probeRuntime());

@@ -16,6 +16,13 @@ export const IS_EXTENSION: boolean =
   typeof location !== "undefined" &&
   (location.protocol === "chrome-extension:" || location.protocol === "moz-extension:");
 
+/**
+ * The extension's hidden page that keeps background work going while no window is open
+ * (see `lib/background-runner.ts`). Same app code, nothing drawn, only `chrome.runtime`.
+ */
+export const IS_BACKGROUND_RUNNER: boolean =
+  IS_EXTENSION && typeof location !== "undefined" && new URLSearchParams(location.search).has("runner");
+
 /** The Chrome Web Store page for the companion extension, when one has been published. */
 export const EXTENSION_STORE_URL: string = import.meta.env.VITE_EXTENSION_STORE_URL ?? "";
 

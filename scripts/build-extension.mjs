@@ -111,6 +111,8 @@ rmSync(FIREFOX_OUT, { recursive: true, force: true });
 cpSync(OUT, FIREFOX_OUT, { recursive: true });
 const firefox = { ...manifest };
 firefox.background = { scripts: ["background.js"] };
+// No offscreen documents in Firefox, so no hidden background runner (lib/background-runner.ts).
+firefox.permissions = firefox.permissions.filter((permission) => permission !== "offscreen");
 delete firefox.minimum_chrome_version;
 firefox.browser_specific_settings = { gecko: { id: GECKO_ID, strict_min_version: "128.0" } };
 writeFileSync(path.join(FIREFOX_OUT, "manifest.json"), `${JSON.stringify(firefox, null, 2)}\n`);

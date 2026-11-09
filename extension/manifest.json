@@ -36,7 +36,9 @@
     "tabs",
     "scripting",
     "storage",
-    "unlimitedStorage"
+    "unlimitedStorage",
+    "offscreen",
+    "alarms"
   ],
   "host_permissions": [],
   "minimum_chrome_version": "116",

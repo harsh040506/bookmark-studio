@@ -31,5 +31,6 @@ You'll get an acknowledgement within a few days.
 | `optional_host_permissions: <all_urls>`, asked for on first use | Reading pages, checking links, capturing screenshots and fetching favicons for the sites in the user's library. Not granted at install; the user allows it from a button in the app, and can revoke it in the browser's extension settings |
 | `tabs`, `scripting` | Opening and reading the brief screenshot window, and injecting the bridge into already-open app tabs after install |
 | `storage`, `unlimitedStorage` | The library and its images in IndexedDB, without the default quota |
+| `offscreen`, `alarms` | Finishing background work (reading pages, checking links) in a hidden page while no Bookmark Studio window is open, including after the browser restarts. The page closes once the work is done. Neither shows an install warning |
 
 Background capture windows are off by default; the extension opens one only when the user asks for a screenshot, or after they switch background captures on.

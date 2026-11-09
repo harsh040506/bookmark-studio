@@ -2,7 +2,7 @@
  * Reading pages, checking links, screenshots, picture indexing and offline copies, both
  * as jobs the person starts and as the background pipeline.
  */
-import { useCallback, useEffect } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { toast } from "sonner";
 import {
   hasPage,
@@ -30,6 +30,8 @@ import {
   subscribePipeline,
   yieldPipeline,
 } from "../../lib/pipeline";
+import { workRemains, type WorkReport } from "../../lib/background-runner";
+import { IS_EXTENSION } from "../../lib/env";
 import { forgetPrefetch } from "../../lib/prefetch";
 import { captureResultPairs } from "../../lib/rebase";
 import { friendlyFailure } from "../../lib/failure";
@@ -45,6 +47,8 @@ export function useBackgroundWork(core: LibraryCore) {
     settings,
     runtime,
     loading,
+    hydrating,
+    pipeline,
     job,
     setJob,
     serverStatus,
@@ -764,6 +768,34 @@ export function useBackgroundWork(core: LibraryCore) {
   }, []);
 
   useEffect(() => subscribePipeline(setPipeline), []);
+
+  /*
+    In the extension, tell the service worker whether work is left, so it can keep going
+    in a hidden page after the last window closes or the browser restarts (see
+    lib/background-runner.ts). Only once the whole library is loaded: before that the queue
+    looks empty. "Done" waits a few seconds, so the last batch's writes land before the
+    hidden page is closed and a brief lull between batches does not count.
+  */
+  const reportedWork = useRef<boolean | null>(null);
+  const workLeft = !loading && !hydrating ? workRemains(pipeline) : null;
+  useEffect(() => {
+    if (!IS_EXTENSION || workLeft === null || workLeft === reportedWork.current) return;
+    const send = () => {
+      reportedWork.current = workLeft;
+      const report: WorkReport = { type: "background-work", pending: workLeft };
+      try {
+        chrome.runtime.sendMessage(report, () => void chrome.runtime.lastError);
+      } catch {
+        // The extension is reloading; the next change reports again.
+      }
+    };
+    if (workLeft) {
+      send();
+      return;
+    }
+    const timer = setTimeout(send, 4_000);
+    return () => clearTimeout(timer);
+  }, [workLeft]);
 
   return {
     requireServer,

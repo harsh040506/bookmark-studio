@@ -268,6 +268,42 @@ async function main() {
 
     check(!cspViolations.length, `no Content Security Policy violations${cspViolations.length ? `: ${cspViolations.slice(0, 3).join("; ")}` : ""}`);
 
+    // ------------------------------------------- background work with no window open
+    // Closing the last window with pages still to read hands the work to a hidden page,
+    // which reads them and closes itself (lib/background-runner.ts).
+    const isRunner = (t) => t.url().startsWith(`chrome-extension://${id}/index.html?runner`);
+    const waitFor = async (test, ms) => {
+      for (let waited = 0; waited < ms; waited += 500) {
+        if (await test()) return true;
+        await new Promise((r) => setTimeout(r, 500));
+      }
+      return false;
+    };
+    // Written straight to the database, so the open window never hears of it: only the
+    // hidden page can fill it in.
+    await app.evaluate(putRow, "smoke-background");
+    await app.evaluate(() => new Promise((resolve) => chrome.runtime.sendMessage({ type: "background-work", pending: true }, resolve)));
+    await app.close();
+    const runnerStarted = await waitFor(() => browser.targets().some(isRunner), 15_000);
+    check(runnerStarted, "closing the last window with work left starts the hidden background page");
+    const runnerFinished = await waitFor(() => !browser.targets().some(isRunner), 90_000);
+    check(runnerFinished, "the hidden background page closes itself once the work is done");
+    const reader = await browser.newPage();
+    await reader.goto(`chrome-extension://${id}/approve.html`);
+    const readRow = (rowId) =>
+      new Promise((resolve) => {
+        const request = indexedDB.open("smart-bookmark-studio");
+        request.onsuccess = () => {
+          const get = request.result.transaction("bookmarks", "readonly").objectStore("bookmarks").get(rowId);
+          get.onsuccess = () => {
+            request.result.close();
+            resolve(get.result ? { read: Boolean(get.result.meta?.fetchedAt), checked: Boolean(get.result.health?.checkedAt) } : null);
+          };
+        };
+      });
+    const filled = await reader.evaluate(readRow, "smoke-background");
+    check(filled?.read || filled?.checked, `with no window open, the hidden page filled in a bookmark (${JSON.stringify(filled)})`);
+
     console.log("[smoke] PASS");
   } finally {
     await browser.close();

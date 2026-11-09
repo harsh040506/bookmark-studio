@@ -33,6 +33,8 @@
  * short time the page takes to settle — a corner-of-desktop flicker, not a popup stealing
  * the screen — then it closes itself.
  */
+import { RUNNER_PATH, isRunnerUrl, isWorkReport, runnerAction } from "../lib/background-runner";
+import { log } from "../lib/log";
 import { assertPlausiblyPublic, BlockedUrlError } from "../lib/net-guard";
 import {
   promptForPageAccess,
@@ -358,6 +360,23 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true; // keep the message channel open for the async response
   }
 
+  if (isWorkReport(message)) {
+    // From the extension's own pages (a window, or the hidden runner) only.
+    if (!sender.url?.startsWith(chrome.runtime.getURL(""))) return undefined;
+    void chrome.storage.local
+      .set({ [WORK_KEY]: message.pending })
+      .catch(() => undefined)
+      .then(() => reviewRunner());
+    return undefined;
+  }
+
+  if (message.type === "page-access") {
+    // The hidden runner has no `chrome.permissions`, so it asks here.
+    if (!sender.url?.startsWith(chrome.runtime.getURL(""))) return undefined;
+    void hasPageAccess().then(sendResponse);
+    return true;
+  }
+
   if (message.type === "library-changed") {
     // From the extension's own window only: its library changed.
     if (!sender.url?.startsWith(chrome.runtime.getURL(""))) return undefined;
@@ -406,8 +425,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           return bridgeBookmarks(message.payload);
         case "library-id":
         case "library-pull":
-        case "library-push":
           return bridgeLibrary(message.op, message.payload);
+        case "library-push": {
+          const applied = (await bridgeLibrary(message.op, message.payload)) as { changed: number };
+          // New rows from the website may need reading, even with no window open here.
+          if (applied.changed) void noteWorkPending();
+          return applied;
+        }
         default:
           throw new Error(`Unknown request: ${String(message.op)}`);
       }
@@ -444,4 +468,83 @@ chrome.action.onClicked.addListener(() => void openApp());
 chrome.runtime.onInstalled.addListener((details) => {
   void injectIntoOpenTabs();
   if (details.reason === "install") void openApp();
+  void reviewRunner();
+});
+
+/* ------------------------------------------- background work with no window open */
+
+/*
+  The queue runs in a page. With no Bookmark Studio window open (the last one closed, or
+  the browser just started) a hidden page, an offscreen document running the same app
+  code, carries on until the work is done. See lib/background-runner.ts for the rules.
+*/
+const WORK_KEY = "workPending";
+const HEARTBEAT_ALARM = "background-work";
+const APP_URL = chrome.runtime.getURL("index.html");
+
+async function noteWorkPending(): Promise<void> {
+  await chrome.storage.local.set({ [WORK_KEY]: true }).catch(() => undefined);
+  await reviewRunner();
+}
+
+let reviewing: Promise<void> | null = null;
+let reviewAgain = false;
+
+/** Opens or closes the hidden runner to match the current facts. One review at a time. */
+function reviewRunner(): Promise<void> {
+  if (reviewing) {
+    reviewAgain = true;
+    return reviewing;
+  }
+  reviewing = (async () => {
+    do {
+      reviewAgain = false;
+      try {
+        await reviewOnce();
+      } catch (error) {
+        log.warn("background-runner.review-failed", { error });
+      }
+    } while (reviewAgain);
+  })().finally(() => {
+    reviewing = null;
+  });
+  return reviewing;
+}
+
+async function reviewOnce(): Promise<void> {
+  // Firefox has neither offscreen documents nor `getContexts`; its work waits for a window.
+  const offscreen = typeof chrome.offscreen?.createDocument === "function" && typeof chrome.runtime.getContexts === "function";
+  if (!offscreen) return;
+  const contexts = await chrome.runtime.getContexts({});
+  const runnerOpen = contexts.some((context) => context.contextType === "OFFSCREEN_DOCUMENT");
+  const appWindowOpen = contexts.some((context) => {
+    const url = context.documentUrl ?? "";
+    return context.contextType === "TAB" && url.startsWith(APP_URL) && !isRunnerUrl(new URL(url).search);
+  });
+  const stored = await chrome.storage.local.get(WORK_KEY).catch(() => ({}) as Record<string, unknown>);
+  const action = runnerAction({ offscreen, workPending: stored[WORK_KEY] === true, appWindowOpen, runnerOpen });
+  if (action === "start") {
+    await chrome.offscreen.createDocument({
+      url: RUNNER_PATH,
+      reasons: ["DOM_PARSER" as chrome.offscreen.Reason],
+      justification: "Reads the pages saved in the library to fill in their descriptions and check their links while no Bookmark Studio window is open.",
+    });
+  } else if (action === "close") {
+    await chrome.offscreen.closeDocument();
+  }
+}
+
+chrome.runtime.onStartup.addListener(() => void reviewRunner());
+// A heartbeat, in case the runner stopped (the browser may also clear alarms on restart,
+// so it is created again whenever the service worker starts).
+void chrome.alarms
+  ?.get(HEARTBEAT_ALARM)
+  .then((alarm) => alarm ?? chrome.alarms.create(HEARTBEAT_ALARM, { periodInMinutes: 5 }))
+  .catch(() => undefined);
+chrome.alarms?.onAlarm.addListener((alarm) => {
+  if (alarm.name === HEARTBEAT_ALARM) void reviewRunner();
+});
+// The last window closing hands the work to the runner straight away.
+chrome.tabs.onRemoved.addListener(() => {
+  setTimeout(() => void reviewRunner(), 500);
 });
