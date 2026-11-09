@@ -64,11 +64,93 @@ async function webp(buffer, file, { width, quality = 88 } = {}) {
   console.log(`[media] ${path.relative(ROOT, file)}`);
 }
 
+/**
+ * Waits until every picture on screen has loaded and decoded: no loading placeholders left,
+ * and each visible image complete with real pixels. Off-screen (lazy) images are ignored.
+ */
+async function imagesReady(page, timeout = 20_000) {
+  await page
+    .waitForFunction(
+      () => {
+        const inView = (element) => {
+          const rect = element.getBoundingClientRect();
+          return rect.width > 0 && rect.bottom > 0 && rect.top < innerHeight && rect.right > 0 && rect.left < innerWidth;
+        };
+        if ([...document.querySelectorAll(".bs-ph")].some(inView)) return false;
+        return [...document.images].filter(inView).every((image) => image.complete && image.naturalWidth > 0);
+      },
+      { timeout, polling: 200 },
+    )
+    .catch(() => console.log("[media] some pictures were still loading after 20 s; carrying on"));
+  // Decode what is on screen; an off-screen lazy image would never finish, so it is skipped.
+  await page.evaluate(() =>
+    Promise.race([
+      Promise.all(
+        [...document.images]
+          .filter((image) => image.complete && image.naturalWidth > 0 && image.getBoundingClientRect().bottom > 0 && image.getBoundingClientRect().top < innerHeight)
+          .map((image) => image.decode().catch(() => undefined)),
+      ),
+      new Promise((resolve) => setTimeout(resolve, 5_000)),
+    ]),
+  );
+}
+
 async function settle(page, ms = 600) {
   // The pointer is parked in an empty corner, so no card shows its hover tools.
   await page.mouse.move(2, (page.viewport()?.height ?? 800) - 2);
   await page.evaluate(() => document.fonts.ready);
+  await imagesReady(page);
   await wait(ms);
+}
+
+/**
+ * Retakes, once, any preview that came out as a blank page (some sites fade in after load).
+ * Runs at a tall viewport so every card in the current view is drawn and can be measured.
+ */
+async function retakeBlankPreviews(page) {
+  const viewport = page.viewport();
+  await page.setViewport({ ...viewport, height: 3600 });
+  await settle(page, 800);
+  const blank = await page.evaluate(() =>
+    [...document.querySelectorAll(".bs-item-card")].flatMap((card) => {
+      const image = card.querySelector(".bs-item-media img");
+      if (!image?.naturalWidth) return [];
+      const canvas = document.createElement("canvas");
+      canvas.width = canvas.height = 24;
+      const context = canvas.getContext("2d");
+      context.drawImage(image, 0, 0, 24, 24);
+      let data;
+      try {
+        data = context.getImageData(0, 0, 24, 24).data;
+      } catch {
+        return [];
+      }
+      let sum = 0;
+      let squares = 0;
+      for (let index = 0; index < data.length; index += 4) {
+        const light = 0.2126 * data[index] + 0.7152 * data[index + 1] + 0.0722 * data[index + 2];
+        sum += light;
+        squares += light * light;
+      }
+      const count = data.length / 4;
+      const spread = Math.sqrt(squares / count - (sum / count) ** 2);
+      return spread < 3 ? [card.querySelector(".bs-item-title")?.textContent ?? ""] : [];
+    }),
+  );
+  for (const title of blank.filter(Boolean)) {
+    console.log(`[media] retaking a blank preview: ${title}`);
+    await clickCard(page, title);
+    const refresh = await page.waitForSelector('button[aria-label="Refresh preview"]', { timeout: 5_000 }).catch(() => null);
+    if (refresh) {
+      await refresh.click();
+      await wait(2_000);
+      await previewsSettled(page);
+    }
+    await page.keyboard.press("Escape");
+    await wait(500);
+  }
+  await page.setViewport(viewport);
+  await settle(page, 500);
 }
 
 /** Clicks the bookmark card whose title starts with `title`. */
@@ -189,7 +271,8 @@ async function renderOg(browser, { heading, kicker, shot, file }) {
   </body></html>`);
   await settle(page, 200);
   const png = await page.screenshot({ type: "png" });
-  await sharp(png).png({ compressionLevel: 9, palette: false }).toFile(file);
+  // A palette PNG keeps it near 100 KB; WhatsApp drops preview images over 300 KB.
+  await sharp(png).png({ compressionLevel: 9, palette: true, quality: 92, effort: 10 }).toFile(file);
   await page.close();
   console.log(`[media] ${path.relative(ROOT, file)}`);
 }
@@ -210,114 +293,13 @@ async function main() {
   });
   try {
     // MEDIA_ONLY=showcase or MEDIA_ONLY=sample re-shoots just one set.
-    if (process.env.MEDIA_ONLY !== "sample") await showcase(executablePath);
-    if (process.env.MEDIA_ONLY === "showcase") return;
-    const desktop = { width: 1440, height: 900, deviceScaleFactor: 2 };
+    const hero = process.env.MEDIA_ONLY === "sample" ? null : await showcase(executablePath);
+    if (process.env.MEDIA_ONLY !== "showcase") await sampleSet(browser);
+    if (!hero) return;
 
-    // The first-run screen, in a throwaway context so it is always empty.
-    const fresh = await browser.createBrowserContext();
-    const first = await fresh.newPage();
-    await first.setViewport(desktop);
-    await first.emulateMediaFeatures([{ name: "prefers-color-scheme", value: "light" }]);
-    await first.goto(APP, { waitUntil: "networkidle0" });
-    await first.waitForSelector("text/Load the sample", { timeout: 20_000 });
-    await settle(first);
-    await webp(await first.screenshot(), path.join(DOCS, "welcome-light.webp"));
-    await fresh.close();
-
-    const page = await browser.newPage();
-    await page.setViewport(desktop);
-    await page.emulateMediaFeatures([{ name: "prefers-color-scheme", value: "light" }, { name: "prefers-reduced-motion", value: "no-preference" }]);
-    await page.goto(APP, { waitUntil: "networkidle0" });
-    // A service worker left from an earlier build would announce "a new version" in every
-    // picture; start each run without one.
-    await page.evaluate(async () => {
-      for (const registration of await navigator.serviceWorker.getRegistrations()) await registration.unregister();
-    });
-    await page.reload({ waitUntil: "networkidle0" });
-
-    // The sample library, with every preview filled in.
-    const search = 'input[aria-label="Search the library"]';
-    if (!(await page.$(search))) {
-      await page.click("text/Load the sample");
-      await page.waitForSelector(search, { timeout: 30_000 });
-    }
-    await wait(3000);
-    await previewsSettled(page);
-
-    // Reading has the most varied, readable previews: the best first impression.
-    await clickNav(page, "Reading");
-    await settle(page, 2000);
-    const library = await page.screenshot();
-    await webp(library, path.join(DOCS, "library-light.webp"));
-    await webp(library, path.join(PUBLIC_MEDIA, "library-light.webp"), { width: 1440, quality: 84 });
-    await sharp(library).resize({ width: 1440 }).png({ compressionLevel: 9 }).toFile(path.join(PUBLIC_MEDIA, "library-light.png"));
-    const ogShot = await sharp(library).resize({ width: 1200 }).png().toBuffer();
-
-    // A search across the whole library that forgives a typo.
-    await clickNav(page, "All bookmarks");
-    await typeSlowly(page, 'input[aria-label="Search the library"]', "typografy", 0);
-    await settle(page, 1200);
-    await webp(await page.screenshot(), path.join(DOCS, "search-light.webp"));
-    await page.click('button[aria-label="Clear search"]');
-    await settle(page);
-
-    // The detail panel.
-    await clickNav(page, "Reading");
-    await settle(page);
-    await clickCard(page, "Quanta Magazine");
-    await settle(page, 1200);
-    await webp(await page.screenshot(), path.join(DOCS, "detail-light.webp"));
-    await page.keyboard.press("Escape");
-    await settle(page);
-
-    // Dark, on another folder.
-    await clickNav(page, "Learning");
-    await page.emulateMediaFeatures([{ name: "prefers-color-scheme", value: "dark" }]);
-    await settle(page, 1200);
-    await webp(await page.screenshot(), path.join(DOCS, "library-dark.webp"));
-    await page.emulateMediaFeatures([{ name: "prefers-color-scheme", value: "light" }]);
-
-    // A phone.
-    await page.setViewport({ width: 390, height: 844, deviceScaleFactor: 3, isMobile: true, hasTouch: true });
-    await settle(page, 1500);
-    await webp(await page.screenshot(), path.join(DOCS, "mobile-light.webp"), { quality: 86 });
-
-    // The walk-through: a typo forgiven, a filter typed, a bookmark opened, the layouts.
-    await page.setViewport({ width: 1280, height: 800, deviceScaleFactor: 1 });
-    await page.reload({ waitUntil: "networkidle0" });
-    await page.waitForSelector(search);
-    await clickNav(page, "Reading");
-    await settle(page, 2000);
-    const frames = await record(page, async () => {
-      await wait(1400);
-      await clickNav(page, "All bookmarks");
-      await wait(900);
-      await typeSlowly(page, 'input[aria-label="Search the library"]', "typografy");
-      await wait(2200);
-      await page.click('button[aria-label="Clear search"]');
-      await wait(500);
-      await typeSlowly(page, 'input[aria-label="Search the library"]', "kind:video");
-      await wait(2000);
-      await page.click('button[aria-label="Clear search"]');
-      await wait(500);
-      await clickNav(page, "Reading");
-      await wait(1000);
-      await clickCard(page, "Quanta Magazine");
-      await wait(2400);
-      await page.keyboard.press("Escape");
-      await wait(600);
-      await page.click('[aria-label="Masonry"]');
-      await wait(1800);
-      await page.click('[aria-label="List"]');
-      await wait(1800);
-      await page.click('[aria-label="Grid"]');
-      await wait(1200);
-      await clickNav(page, "Learning");
-      await wait(1600);
-    });
-    await encodeGif(frames, path.join(DOCS, "demo.gif"), 1100);
-
+    // The about page's picture and the link previews come from the real library.
+    await webp(hero, path.join(PUBLIC_MEDIA, "library-light.webp"), { width: 1440, quality: 84 });
+    await sharp(hero).resize({ width: 1440 }).png({ compressionLevel: 9 }).toFile(path.join(PUBLIC_MEDIA, "library-light.png"));
     // Link previews, one per page.
     const og = {
       home: { heading: "A calm home for everything you save", kicker: "Import, search and tidy years of bookmarks. Free, open source, private." },
@@ -325,7 +307,7 @@ async function main() {
       privacy: { heading: "Your library never leaves your browser", kicker: "No account, no analytics, no cookies, no AI." },
     };
     for (const sitePage of PAGES) {
-      await renderOg(browser, { ...og[sitePage.id], shot: ogShot, file: path.join(ROOT, "public", sitePage.og.image) });
+      await renderOg(browser, { ...og[sitePage.id], shot: await sharp(hero).resize({ width: 1200 }).png().toBuffer(), file: path.join(ROOT, "public", sitePage.og.image) });
     }
   } finally {
     await browser.close();
@@ -333,10 +315,129 @@ async function main() {
   }
 }
 
+
+/** One step of a walk-through: let the pictures load, then hold for `ms`. */
+async function step(page, ms) {
+  await imagesReady(page, 10_000);
+  await wait(ms);
+}
+
+/** The sample library's pictures and walk-through (docs/media/*.webp and demo.gif). */
+async function sampleSet(browser) {
+  const desktop = { width: 1440, height: 900, deviceScaleFactor: 2 };
+
+  // The first-run screen, in a throwaway context so it is always empty.
+  const fresh = await browser.createBrowserContext();
+  const first = await fresh.newPage();
+  await first.setViewport(desktop);
+  await first.emulateMediaFeatures([{ name: "prefers-color-scheme", value: "light" }]);
+  await first.goto(APP, { waitUntil: "networkidle0" });
+  await first.waitForSelector("text/Load the sample", { timeout: 20_000 });
+  await settle(first);
+  await webp(await first.screenshot(), path.join(DOCS, "welcome-light.webp"));
+  await fresh.close();
+
+  const page = await browser.newPage();
+  await page.setViewport(desktop);
+  await page.emulateMediaFeatures([{ name: "prefers-color-scheme", value: "light" }, { name: "prefers-reduced-motion", value: "no-preference" }]);
+  await page.goto(APP, { waitUntil: "networkidle0" });
+  // A service worker left from an earlier build would announce "a new version" in every
+  // picture; start each run without one.
+  await page.evaluate(async () => {
+    for (const registration of await navigator.serviceWorker.getRegistrations()) await registration.unregister();
+  });
+  await page.reload({ waitUntil: "networkidle0" });
+
+  // The sample library, with every preview filled in.
+  const search = 'input[aria-label="Search the library"]';
+  if (!(await page.$(search))) {
+    await page.click("text/Load the sample");
+    await page.waitForSelector(search, { timeout: 30_000 });
+  }
+  await wait(3000);
+  await previewsSettled(page);
+
+  // Reading has the most varied, readable previews: the best first impression.
+  await clickNav(page, "Reading");
+  await settle(page, 2000);
+  await webp(await page.screenshot(), path.join(DOCS, "library-light.webp"));
+
+  // A search across the whole library that forgives a typo.
+  await clickNav(page, "All bookmarks");
+  await typeSlowly(page, 'input[aria-label="Search the library"]', "typografy", 0);
+  await settle(page, 1200);
+  await webp(await page.screenshot(), path.join(DOCS, "search-light.webp"));
+  await page.click('button[aria-label="Clear search"]');
+  await settle(page);
+
+  // The detail panel.
+  await clickNav(page, "Reading");
+  await settle(page);
+  await clickCard(page, "Quanta Magazine");
+  await settle(page, 1200);
+  await webp(await page.screenshot(), path.join(DOCS, "detail-light.webp"));
+  await page.keyboard.press("Escape");
+  await settle(page);
+
+  // Dark, on another folder.
+  await clickNav(page, "Learning");
+  await page.emulateMediaFeatures([{ name: "prefers-color-scheme", value: "dark" }]);
+  await settle(page, 1200);
+  await webp(await page.screenshot(), path.join(DOCS, "library-dark.webp"));
+  await page.emulateMediaFeatures([{ name: "prefers-color-scheme", value: "light" }]);
+
+  // A phone.
+  await page.setViewport({ width: 390, height: 844, deviceScaleFactor: 3, isMobile: true, hasTouch: true });
+  await settle(page, 1500);
+  await webp(await page.screenshot(), path.join(DOCS, "mobile-light.webp"), { quality: 86 });
+
+  // The walk-through: a typo forgiven, a filter typed, a bookmark opened, the layouts.
+  await page.setViewport({ width: 1280, height: 800, deviceScaleFactor: 1 });
+  await page.reload({ waitUntil: "networkidle0" });
+  await page.waitForSelector(search);
+  await clickNav(page, "Reading");
+  await settle(page, 2000);
+  await sampleTour(page, search); // a warm-up pass, so every picture is decoded before recording
+  await clickNav(page, "Reading");
+  await settle(page, 2000);
+  const frames = await record(page, () => sampleTour(page, search));
+  await encodeGif(frames, path.join(DOCS, "demo.gif"), 1100);
+}
+
+async function sampleTour(page, search) {
+  await step(page, 1400);
+  await clickNav(page, "All bookmarks");
+  await step(page, 900);
+  await typeSlowly(page, search, "typografy");
+  await step(page, 2200);
+  await page.click('button[aria-label="Clear search"]');
+  await step(page, 500);
+  await typeSlowly(page, search, "kind:video");
+  await step(page, 2000);
+  await page.click('button[aria-label="Clear search"]');
+  await step(page, 500);
+  await clickNav(page, "Reading");
+  await step(page, 1000);
+  await clickCard(page, "Quanta Magazine");
+  await step(page, 2400);
+  await page.keyboard.press("Escape");
+  await step(page, 600);
+  await page.click('[aria-label="Masonry"]');
+  await step(page, 1800);
+  await page.click('[aria-label="List"]');
+  await step(page, 1800);
+  await page.click('[aria-label="Grid"]');
+  await step(page, 1200);
+  await clickNav(page, "Learning");
+  await step(page, 1600);
+}
+
 /**
- * A second set of pictures from a real-world library (scripts/media/showcase.html): AI
- * startups and a handful of personal projects, imported through the import dialog the way
- * anyone would. Kept in its own profile so the sample library's pictures are unaffected.
+ * The real library (scripts/media/showcase.html): two dozen AI startups and a few personal
+ * projects, imported through the import dialog the way anyone would. It makes the README's
+ * cover walk-through, most of its pictures, the about page's picture and the link previews.
+ * Kept in its own profile so the sample library's pictures are unaffected. Returns the
+ * library shot used for the site.
  */
 async function showcase(executablePath) {
   const browser = await puppeteer.launch({
@@ -347,7 +448,8 @@ async function showcase(executablePath) {
   });
   try {
     const page = await browser.newPage();
-    await page.setViewport({ width: 1440, height: 900, deviceScaleFactor: 2 });
+    const desktop = { width: 1440, height: 900, deviceScaleFactor: 2 };
+    await page.setViewport(desktop);
     await page.emulateMediaFeatures([{ name: "prefers-color-scheme", value: "light" }]);
     await page.goto(APP, { waitUntil: "networkidle0" });
     await page.evaluate(async () => {
@@ -370,38 +472,114 @@ async function showcase(executablePath) {
     }
     await wait(3000);
     await previewsSettled(page);
+    for (const folder of ["AI startups", "My projects"]) {
+      await clickNav(page, folder);
+      await retakeBlankPreviews(page);
+    }
 
+    // The library, light and dark, in each layout.
     await clickNav(page, "AI startups");
-    await settle(page, 2000);
-    await webp(await page.screenshot(), path.join(DOCS, "showcase-startups-light.webp"));
-
-    await clickNav(page, "My projects");
     await settle(page, 1500);
+    const hero = await page.screenshot();
+    await webp(hero, path.join(DOCS, "showcase-startups-light.webp"));
+    await page.click('[aria-label="Masonry"]');
+    await settle(page, 1500);
+    await webp(await page.screenshot(), path.join(DOCS, "showcase-masonry-light.webp"));
+    await page.click('[aria-label="List"]');
+    await settle(page, 1500);
+    await webp(await page.screenshot(), path.join(DOCS, "showcase-list-light.webp"));
+    await page.click('[aria-label="Grid"]');
+    await page.emulateMediaFeatures([{ name: "prefers-color-scheme", value: "dark" }]);
+    await settle(page, 1500);
+    await webp(await page.screenshot(), path.join(DOCS, "showcase-startups-dark.webp"));
+
+    // A bookmark up close, in dark.
+    await clickCard(page, "Daylight");
+    await settle(page, 1500);
+    await webp(await page.screenshot(), path.join(DOCS, "showcase-detail-dark.webp"));
+    await page.keyboard.press("Escape");
+    await page.emulateMediaFeatures([{ name: "prefers-color-scheme", value: "light" }]);
+
+    // One of the projects, described by its own page.
+    await clickNav(page, "My projects");
+    await settle(page, 1000);
     await clickCard(page, "Solid State");
     await settle(page, 1500);
     await webp(await page.screenshot(), path.join(DOCS, "showcase-project-detail.webp"));
     await page.keyboard.press("Escape");
 
+    // Search that reads the pages, not just their titles.
     await clickNav(page, "All bookmarks");
     await wait(1000);
-    await typeSlowly(page, search, "memory");
+    await typeSlowly(page, search, "agents");
     await page.waitForSelector('button[aria-label="Clear search"]', { timeout: 10_000 });
     await settle(page, 1500);
     await webp(await page.screenshot(), path.join(DOCS, "showcase-search-light.webp"));
     await page.click('button[aria-label="Clear search"]');
 
+    // The command palette.
     await clickNav(page, "AI startups");
-    await page.click('[aria-label="List"]');
-    await settle(page, 1500);
-    await webp(await page.screenshot(), path.join(DOCS, "showcase-list-light.webp"));
-    await page.click('[aria-label="Grid"]');
+    await settle(page, 800);
+    await page.keyboard.down("Control");
+    await page.keyboard.press("k");
+    await page.keyboard.up("Control");
+    await wait(500);
+    await page.keyboard.type("memory", { delay: 60 });
+    await settle(page, 1200);
+    await webp(await page.screenshot(), path.join(DOCS, "showcase-palette-light.webp"));
+    await page.keyboard.press("Escape");
+    await wait(400);
 
-    await page.emulateMediaFeatures([{ name: "prefers-color-scheme", value: "dark" }]);
+    // A phone.
+    await page.setViewport({ width: 390, height: 844, deviceScaleFactor: 3, isMobile: true, hasTouch: true });
     await settle(page, 1500);
-    await webp(await page.screenshot(), path.join(DOCS, "showcase-startups-dark.webp"));
+    await webp(await page.screenshot(), path.join(DOCS, "showcase-mobile-light.webp"), { quality: 86 });
+
+    // The cover walk-through. Played once to load and decode every picture, then recorded.
+    await page.setViewport({ width: 1280, height: 800, deviceScaleFactor: 1 });
+    await page.reload({ waitUntil: "networkidle0" });
+    await page.waitForSelector(search);
+    await clickNav(page, "AI startups");
+    await settle(page, 1500);
+    await showcaseTour(page, search);
+    await clickNav(page, "AI startups");
+    await settle(page, 2000);
+    const frames = await record(page, () => showcaseTour(page, search));
+    await encodeGif(frames, path.join(DOCS, "showcase-demo.gif"), 1100);
+    return hero;
   } finally {
     await browser.close();
   }
+}
+
+async function showcaseTour(page, search) {
+  await step(page, 1800);
+  await clickNav(page, "All bookmarks");
+  await step(page, 700);
+  await typeSlowly(page, search, "agents");
+  await step(page, 2400);
+  await page.click('button[aria-label="Clear search"]');
+  await step(page, 400);
+  await clickNav(page, "AI startups");
+  await step(page, 900);
+  await clickCard(page, "Daylight");
+  await step(page, 2400);
+  await page.keyboard.press("Escape");
+  await step(page, 500);
+  await clickNav(page, "My projects");
+  await step(page, 1000);
+  await clickCard(page, "Solid State");
+  await step(page, 2600);
+  await page.keyboard.press("Escape");
+  await step(page, 500);
+  await clickNav(page, "AI startups");
+  await step(page, 900);
+  await page.click('[aria-label="Masonry"]');
+  await step(page, 2000);
+  await page.click('[aria-label="List"]');
+  await step(page, 1800);
+  await page.click('[aria-label="Grid"]');
+  await step(page, 1600);
 }
 
 main().catch((error) => {

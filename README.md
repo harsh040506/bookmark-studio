@@ -18,7 +18,7 @@ No account · No tracking · No AI · Works offline
 
 <br>
 
-<img src="docs/media/demo.gif" width="880" alt="A walk-through of Bookmark Studio: searching for 'typografy' finds typography pages, typing kind:video shows only videos, a bookmark opens in a side panel, and the library switches between grid, masonry and list layouts.">
+<img src="docs/media/showcase-demo.gif" width="880" alt="A walk-through of a real library in Bookmark Studio: a folder of AI startups shown as page previews, a search for 'agents' that reads the pages themselves, Daylight and a personal project opened in the side panel, and the folder switching between masonry, list and grid layouts.">
 
 </div>
 
@@ -48,40 +48,46 @@ So the bookmarks bar turns into a junk drawer, and you stop trusting it. Bookmar
 
 <table>
 <tr>
-<td width="50%"><img src="docs/media/search-light.webp" alt="Searching for the misspelled word 'typografy' finds Google Fonts and Typewolf, with a note that it searched for typography instead."></td>
-<td width="50%"><img src="docs/media/detail-light.webp" alt="The detail panel for a bookmark: a large preview, the page's own description, tags, a note field and highlights."></td>
+<td width="50%"><img src="docs/media/showcase-search-light.webp" alt="Searching for 'agents' across a library finds eight AI startups, including Frontrunner, Cofounder, HydraDB, Supermemory and Operate, each shown with a preview of its page."></td>
+<td width="50%"><img src="docs/media/showcase-project-detail.webp" alt="The detail panel for Solid State, a free course in solid state chemistry: a large preview, the page's own description and its tags."></td>
 </tr>
 <tr>
-<td><sub><b>Typos forgiven.</b> "typografy" finds typography, and it tells you it corrected you.</sub></td>
-<td><sub><b>Everything about a page in one place:</b> preview, description, tags, notes and highlights.</sub></td>
+<td><sub><b>Search what pages say.</b> "agents" finds eight startups, most of which never use the word in their title.</sub></td>
+<td><sub><b>Everything about a page in one place:</b> preview, its own description, tags, notes and highlights.</sub></td>
 </tr>
 </table>
 
 ## A real library
 
-The same app with an everyday collection: two dozen AI startups saved while reading the news, and a few personal projects. Every preview was captured automatically after a single import.
+Two dozen AI startups saved while reading the news, and a few personal projects. One import, and every page arrived with its picture, its own description and its tags.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/media/showcase-startups-dark.webp">
-  <img src="docs/media/showcase-startups-light.webp" alt="A folder of 24 AI startup bookmarks shown as a grid of page previews: Wishlabs, Almanac, Frontrunner, Etched, Abridge, Daylight, Cofounder, Poly, Littlebird and more.">
+  <img src="docs/media/showcase-startups-light.webp" alt="A folder of 24 AI startup bookmarks shown as a grid of page previews: Wishlabs, Almanac, Frontrunner, Etched, Abridge, Daylight, Zero, Cofounder, Poly, Littlebird and more.">
 </picture>
 
 <table>
 <tr>
-<td width="50%"><img src="docs/media/showcase-project-detail.webp" alt="The detail panel for Solid State, a free course in solid state chemistry: a large preview, the page's own description and its tags."></td>
-<td width="50%"><img src="docs/media/showcase-list-light.webp" alt="The same AI startups folder as a compact list, with each page's description, folder and the date it was saved. Pages that now redirect are marked Moved."></td>
+<td width="50%"><img src="docs/media/showcase-masonry-light.webp" alt="The AI startups folder in the masonry layout, where each preview keeps its own height."></td>
+<td width="50%"><img src="docs/media/showcase-list-light.webp" alt="The AI startups folder as a compact list, with each page's description, folder and the date it was saved. Pages that now redirect are marked Moved."></td>
 </tr>
 <tr>
-<td><sub><b>Your own projects, described by their own pages.</b> The description and tags came from the site itself.</sub></td>
-<td><sub><b>The list view</b> fits more on screen, with each page's own summary. "Moved" marks sites that now redirect elsewhere.</sub></td>
+<td><sub><b>Masonry</b> keeps each picture's shape, like a mood board.</sub></td>
+<td><sub><b>List</b> fits more on screen, with each page's own summary. "Moved" marks sites that now redirect.</sub></td>
 </tr>
 <tr>
-<td colspan="2"><img src="docs/media/showcase-search-light.webp" alt="Searching for 'memory' across the library finds Supermemory and HydraDB."></td>
+<td><img src="docs/media/showcase-detail-dark.webp" alt="Dark mode: the detail panel for Daylight, a more caring computer, over the AI startups grid."></td>
+<td><img src="docs/media/showcase-palette-light.webp" alt="The command palette open over the library, with 'memory' typed and Supermemory and HydraDB listed."></td>
 </tr>
 <tr>
-<td colspan="2"><sub><b>Search across everything:</b> "memory" finds the memory-infrastructure startups among all 28 links.</sub></td>
+<td><sub><b>Light and dark,</b> following your system or your choice.</sub></td>
+<td><sub><b>The command palette</b> (<code>Ctrl K</code> or <code>⌘ K</code>) jumps to any bookmark, folder or command.</sub></td>
 </tr>
 </table>
+
+<p align="center">
+  <img src="docs/media/showcase-mobile-light.webp" width="300" alt="Bookmark Studio on a phone: the AI startups folder as a two-column grid of previews.">
+</p>
 
 ## Start in a minute
 
@@ -89,7 +95,28 @@ The same app with an everyday collection: two dozen AI startups saved while read
 2. **[Open Bookmark Studio](https://bookmark-studio-app.vercel.app)** and drop the file anywhere on the page.
 3. **Check the preview, import, and search.**
 
-Not ready to bring your own? Load the **sample library** from the welcome screen and try everything on real links first. It comes out again in one click.
+### Or try the sample library first
+
+Not ready to bring your own? Load the **sample library** from the welcome screen: 89 real links across a dozen folders, so you can try everything first. It comes out again in one click.
+
+<p align="center">
+  <img src="docs/media/demo.gif" width="760" alt="A walk-through of the sample library: searching for 'typografy' finds typography pages, typing kind:video shows only videos, a bookmark opens in a side panel, and the library switches between grid, masonry and list layouts.">
+</p>
+
+<table>
+<tr>
+<td width="50%"><img src="docs/media/welcome-light.webp" alt="The first-run screen: import your bookmarks, try a sample library, or connect the extension."></td>
+<td width="50%"><img src="docs/media/search-light.webp" alt="Searching for the misspelled word 'typografy' finds Google Fonts and Typewolf, with a note that it searched for typography instead."></td>
+</tr>
+<tr>
+<td><sub><b>The first screen:</b> import, try the sample, or connect the extension.</sub></td>
+<td><sub><b>Typos forgiven.</b> "typografy" finds typography, and it tells you it corrected you.</sub></td>
+</tr>
+<tr>
+<td><img src="docs/media/detail-light.webp" alt="The detail panel for Quanta Magazine: a large preview, the page's own description, tags, a note field and highlights."></td>
+<td><img src="docs/media/mobile-light.webp" alt="The sample library on a phone, showing a folder of bookmarks as a two-column grid of previews."></td>
+</tr>
+</table>
 
 ## Three ways to use it
 
@@ -138,7 +165,7 @@ docker run --rm -p 127.0.0.1:5174:5174 bookmark-studio
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/media/library-dark.webp">
-  <img src="docs/media/library-light.webp" alt="A library shown as a grid of large page previews, with folders in the sidebar.">
+  <img src="docs/media/library-light.webp" alt="The sample library's Reading folder as a grid of large page previews, with folders in the sidebar.">
 </picture>
 
 - **Organise your way:** folders, boards and tags, plus smart collections that fill themselves from a saved search. A sparkle marks tags found in the page's own words, so you can tell them from the ones you added.
@@ -149,12 +176,6 @@ docker run --rm -p 127.0.0.1:5174:5174 bookmark-studio
 - **Share without uploading:** export to the standard bookmarks file, JSON or CSV, or share a view as a single web page with the pictures inside.
 - **Undo for everything destructive**, and an activity log of what changed.
 - **Light and dark themes**, and reduced motion when your system asks for it.
-
-<p align="center">
-  <img src="docs/media/mobile-light.webp" width="260" alt="Bookmark Studio on a phone, showing a folder of bookmarks as a two-column grid of previews.">
-  &nbsp;&nbsp;
-  <img src="docs/media/welcome-light.webp" width="560" alt="The first-run screen: import your bookmarks, try a sample library, or connect the extension.">
-</p>
 
 ## Private by design
 

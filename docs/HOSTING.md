@@ -31,7 +31,7 @@ After the first deploy to a new address, submit `https://<your address>/sitemap.
 
 Each page names its own 1200×630 preview image in `site/content.mjs`, under `public/og/`. Platforms cache previews on their side, separately from your site, so fixing a page does not update a preview someone has already shared.
 
-- **Changing a picture:** give the file a new name (`home-2.png`), update `site/content.mjs`, and deploy. The page address stays the same.
+- **Changing a picture:** give the file a new name (`home-3.png`), update `site/content.mjs`, and deploy. The page address stays the same.
 - **Facebook, Instagram, WhatsApp, Messenger:** paste the address into Meta's [Sharing Debugger](https://developers.facebook.com/tools/debug/) and choose **Scrape Again**. WhatsApp may keep an older preview in chats where the link was already sent.
 - **LinkedIn:** paste the address into the [Post Inspector](https://www.linkedin.com/post-inspector/). Inspecting it fetches the page again.
 - **Telegram:** send the address to the `@WebpageBot` bot, which refreshes its preview.

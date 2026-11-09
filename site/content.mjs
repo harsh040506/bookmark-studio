@@ -33,7 +33,7 @@ export const PAGES = [
     title: "Bookmark Studio: a private bookmark manager in your browser",
     description:
       "Import bookmarks from any browser or service, search them properly, find dead links and duplicates, and see every page at a glance. Free, open source, no account.",
-    og: { image: "og/home-1.png", alt: "Bookmark Studio: a calm home for everything you save. A grid of page previews." },
+    og: { image: "og/home-2.png", alt: "Bookmark Studio: a calm home for everything you save. A grid of page previews." },
     markdownIntro: [
       { p: "Bookmark Studio is the app itself. Open it, drop in a bookmarks file (or load the sample library), and start searching. Everything is stored in your browser." },
     ],
@@ -46,7 +46,7 @@ export const PAGES = [
     title: "About Bookmark Studio: find the things you saved",
     description:
       "Years of bookmarks across browsers and services, and you still cannot find the one you need. What Bookmark Studio does about it, and how it stays private.",
-    og: { image: "og/about-1.png", alt: "You saved it for a reason. Bookmark Studio helps you find it again." },
+    og: { image: "og/about-2.png", alt: "You saved it for a reason. Bookmark Studio helps you find it again." },
     eyebrow: "About",
     heading: "You saved it for a reason. Now you can find it.",
     lede:
@@ -178,7 +178,7 @@ export const PAGES = [
     title: "Privacy: Bookmark Studio",
     description:
       "Bookmark Studio keeps your library in your browser. No account, no analytics, no cookies, no AI. What is stored, what the network sees, and how to delete everything.",
-    og: { image: "og/privacy-1.png", alt: "Your library never leaves your browser. Bookmark Studio privacy." },
+    og: { image: "og/privacy-2.png", alt: "Your library never leaves your browser. Bookmark Studio privacy." },
     eyebrow: "Privacy",
     heading: "Your library never leaves your browser",
     lede: "This page explains, in plain language, what Bookmark Studio stores, what it sends over the network, and how you stay in control. It covers the website, the Chrome extension and the local server.",
