@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 5.1.0
 
 ### One library
 - The website and the extension now share one library. Each still keeps its own copy, because browsers give them separate storage, but while the extension is connected, bookmarks, tags, folders, boards, imports and smart collections changed on either side appear on the other within seconds. Deletions carry over and never come back.

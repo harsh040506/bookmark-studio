@@ -153,7 +153,7 @@ function readUrlList(values: unknown[], limit: number): string[] {
  * Reported by `/ping` so a stale browser tab left open across a rebuild can tell that
  * the process it is talking to is no longer the one its assets came from.
  */
-const SERVER_VERSION = "5.0.0";
+const SERVER_VERSION = "5.1.0";
 
 /**
  * Shared budget for the routes that reach out to the wider internet.
