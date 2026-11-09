@@ -45,3 +45,23 @@ describe("recognising a pasted link", () => {
     expect(pastedLink("")).toBeNull();
   });
 });
+
+describe("sharing a link from a phone into the installed app", () => {
+  it("takes the link from the URL field when the sharing app fills it", async () => {
+    const { sharedLink } = await import("../url-input");
+    expect(sharedLink("?share_url=https%3A%2F%2Fexample.com%2Fa")).toBe("https://example.com/a");
+  });
+
+  it("finds the link inside the text, where most Android apps put it", async () => {
+    const { sharedLink } = await import("../url-input");
+    const text = encodeURIComponent("Worth a read: https://blog.example.com/post?id=4).");
+    expect(sharedLink(`?share_title=Hi&share_text=${text}`)).toBe("https://blog.example.com/post?id=4");
+  });
+
+  it("refuses anything that is not a web address", async () => {
+    const { sharedLink } = await import("../url-input");
+    expect(sharedLink(`?share_text=${encodeURIComponent("javascript:alert(1)")}`)).toBeNull();
+    expect(sharedLink("?share_text=just%20some%20words")).toBeNull();
+    expect(sharedLink("")).toBeNull();
+  });
+});

@@ -14,6 +14,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 
 import type { ActivityEntry, DeviceName, Settings, SortMode, ViewMode } from "@shared/types";
+import { wantsBrowserSync } from "@shared/types";
 import {
   AlertTriangle,
   Check,
@@ -47,7 +48,7 @@ import { APP_VERSION, EXTENSION_STORE_URL, IS_EXTENSION, REPOSITORY_URL } from "
 import { diagnosticsReport } from "@/lib/log";
 import { formatRelative } from "@/lib/library";
 import { requestBridgeAccess } from "@/lib/bridge";
-import { describeRuntime, type RuntimeState } from "@/lib/runtime";
+import { describeRuntime, needsPageAccess, requestPageAccess, type RuntimeState } from "@/lib/runtime";
 import { cn, formatBytes } from "@/lib/utils";
 
 export type SettingsTab = "appearance" | "connections" | "background" | "storage" | "data" | "about";
@@ -354,6 +355,14 @@ export function SettingsDialog({
                     </Badge>
                   ) : null}
                 </div>
+                {needsPageAccess(runtime) ? (
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Button size="sm" onClick={() => void requestPageAccess()}>
+                      <Plug /> Allow reading pages…
+                    </Button>
+                    <span className="form-row-hint">Asked once. Needed for previews, link checks and searching inside pages.</span>
+                  </div>
+                ) : null}
                 {runtime.extensionNeedsApproval ? (
                   <div className="flex flex-wrap items-center gap-2">
                     <Button size="sm" onClick={() => void requestBridgeAccess().catch(() => undefined)}>
@@ -405,7 +414,7 @@ export function SettingsDialog({
                   <Toggle
                     label="Sync with this browser’s bookmarks"
                     hint="Mirror this browser’s bookmarks here, two-way. Bookmarks you imported from files are never written to the browser."
-                    checked={settings.browserSync}
+                    checked={wantsBrowserSync(settings)}
                     onChange={onBrowserSync}
                   />
                 ) : null}
@@ -474,6 +483,24 @@ export function SettingsDialog({
                 checked={settings.autoCapture}
                 onChange={(value) => onChange({ autoCapture: value })}
               />
+              {runtime.extension && runtime.net !== "extension" ? (
+                <Toggle
+                  label="Share one library with the extension"
+                  hint="Bookmarks, tags, folders and boards added here or in the extension’s own window appear in both. Screenshots and offline copies stay where they were taken. Everything stays in this browser."
+                  cost="no network"
+                  checked={settings.shareWithExtension}
+                  onChange={(value) => onChange({ shareWithExtension: value })}
+                />
+              ) : null}
+              {runtime.net === "extension" || runtime.net === "bridge" ? (
+                <Toggle
+                  label="Capture in the background with small windows"
+                  hint="The extension can only photograph a page by opening it in a small, unfocused window for a few seconds. Off: pages use their own preview image, and you can still take a screenshot from a bookmark’s details."
+                  cost="visible windows"
+                  checked={settings.captureWithWindows}
+                  onChange={(value) => onChange({ captureWithWindows: value })}
+                />
+              ) : null}
               <Toggle
                 label="Check links"
                 hint="Verifies each link still works, and records where it now redirects."
@@ -663,7 +690,9 @@ export function SettingsDialog({
                     const ok = await confirm({
                       title: "Clear the whole library?",
                       description:
-                        "Every bookmark, folder, board, collection and stored image in this browser will be deleted. This cannot be undone.",
+                        runtime.extension && runtime.net !== "extension" && settings.shareWithExtension
+                          ? "Every bookmark, folder, board, collection and stored image in this browser will be deleted, here and in the connected extension, which shares this library. This cannot be undone."
+                          : "Every bookmark, folder, board, collection and stored image in this browser will be deleted. This cannot be undone.",
                       confirmLabel: "Delete everything",
                       destructive: true,
                     });

@@ -49,6 +49,7 @@
  * the bookmark itself, so a reload never redoes a page.
  */
 import { hasPage, type Bookmark, type DeviceName } from "../../shared/types";
+import { wakeAfter } from "./wake";
 
 /**
  * The passes the queue runs.
@@ -77,8 +78,13 @@ export const TASK_KINDS: TaskKind[] = ["shot", "meta", "health", "visual", "offl
 
 /** What the pipeline needs from the library layer to actually do the work. */
 export interface PipelineWorkers {
-  /** Resolves to the subset of URLs that actually produced a screenshot. */
-  capture: (urls: string[], device: DeviceName) => Promise<string[]>;
+  /**
+   * Resolves to the URLs that actually produced a screenshot.
+   *
+   * Takes rows rather than URLs: two bookmarks of the same page are two rows, and both
+   * need recording, or the second looks uncaptured and is captured again forever.
+   */
+  capture: (rows: Bookmark[], device: DeviceName) => Promise<string[]>;
   /**
    * Resolves to the number of rows *recorded*, successful or not.
    *
@@ -221,6 +227,21 @@ const queues: Record<TaskKind, Map<string, Entry>> = {
 let library = new Map<string, Bookmark>();
 
 const inFlight: Record<TaskKind, number> = { shot: 0, meta: 0, health: 0, visual: 0, offline: 0 };
+/**
+ * Ids being worked on right now, per pass.
+ *
+ * `take` removes an entry from its queue, and every library change re-runs
+ * `observeLibrary`; without this set the row being worked on still looked unfinished and
+ * was queued again, with its attempt count back at zero, so the same page was fetched
+ * twice at once and the failure limit never applied.
+ */
+const running: Record<TaskKind, Set<string>> = {
+  shot: new Set(),
+  meta: new Set(),
+  health: new Set(),
+  visual: new Set(),
+  offline: new Set(),
+};
 const done: Record<TaskKind, number> = { shot: 0, meta: 0, health: 0, visual: 0, offline: 0 };
 const spent: Record<TaskKind, number[]> = { shot: [], meta: [], health: [], visual: [], offline: [] };
 /**
@@ -264,7 +285,7 @@ let failed = 0;
 const MAX_TRACKED_FAILURES = 60;
 let failures: PipelineFailure[] = [];
 let pumping = false;
-let timer: ReturnType<typeof setTimeout> | null = null;
+let timer: (() => void) | null = null;
 
 const subscribers = new Set<(state: PipelineState) => void>();
 let lastState: PipelineState | null = null;
@@ -320,10 +341,21 @@ export function yieldPipeline(value: boolean): void {
   if (!value) schedule(0);
 }
 
-/** Wired to `visibilitychange`: a hidden tab has nothing on screen worth prioritising. */
+/**
+ * Wired to `visibilitychange`.
+ *
+ * Browsers slow timers in hidden tabs to about once a minute after a few minutes, which
+ * would starve the queue. While hidden, the pump is woken by a worker timer instead
+ * (see `wake.ts`), which those limits do not apply to.
+ */
 export function setPipelineHidden(value: boolean): void {
   hidden = value;
-  if (!value) schedule(0);
+  schedule(0);
+}
+
+/** Whether the tab is hidden. Read by the scheduler only. */
+export function pipelineHidden(): boolean {
+  return hidden;
 }
 
 /* ------------------------------------------------------------------ intake */
@@ -429,6 +461,7 @@ function enqueueNeeded(bookmark: Bookmark, priority: number): void {
 }
 
 function push(kind: TaskKind, bookmark: Bookmark, priority: number): void {
+  if (running[kind].has(bookmark.id)) return;
   const queue = queues[kind];
   const existing = queue.get(bookmark.id);
   if (existing) {
@@ -494,10 +527,10 @@ function needsOffline(bookmark: Bookmark): boolean {
 
 function schedule(delay = BACKGROUND_GAP_MS): void {
   if (timer) return;
-  timer = setTimeout(() => {
+  timer = wakeAfter(delay, hidden, () => {
     timer = null;
     void pump();
-  }, delay);
+  });
 }
 
 function blockedBecause(): PipelineState["reason"] {
@@ -505,16 +538,12 @@ function blockedBecause(): PipelineState["reason"] {
   if (!online) return "offline";
   if (yielded) return "yielded";
   if (!TASK_KINDS.some((kind) => enabled(kind))) return "off";
-  if (hidden && !anySighted()) return "paused";
+  /*
+    A hidden tab keeps working. Pausing it meant a library only filled in while someone
+    sat watching it, which on a few thousand bookmarks is never. `hidden` now only
+    changes ordering (nothing is "on screen"), and the token bucket keeps the pace polite.
+  */
   return "working";
-}
-
-/** Whether anything queued is on, or near, the screen. */
-function anySighted(): boolean {
-  for (const kind of TASK_KINDS) {
-    for (const entry of queues[kind].values()) if (entry.priority > 0) return true;
-  }
-  return false;
 }
 
 async function pump(): Promise<void> {
@@ -560,7 +589,10 @@ function take(kind: TaskKind): Entry[] {
   // bookmark — and this runs a few times a second at most.
   entries.sort((a, b) => b.priority - a.priority);
   const batch = entries.slice(0, size);
-  for (const entry of batch) queue.delete(entry.id);
+  for (const entry of batch) {
+    queue.delete(entry.id);
+    running[kind].add(entry.id);
+  }
   return batch;
 }
 
@@ -577,12 +609,7 @@ async function run(kind: TaskKind, batch: Entry[]): Promise<void> {
     if (!rows.length) return;
 
     if (kind === "shot") {
-      const captured = new Set(
-        await workers!.capture(
-          rows.map((row) => row.url),
-          settings.device,
-        ),
-      );
+      const captured = new Set(await workers!.capture(rows, settings.device));
       for (const entry of batch) {
         if (captured.has(entry.url)) done.shot += 1;
         else retry("shot", entry);
@@ -593,9 +620,7 @@ async function run(kind: TaskKind, batch: Entry[]): Promise<void> {
       // A page that will never parse is still *recorded* as attempted, so it drops out of
       // `needsMeta` on the next observe rather than looping here. Only a batch that failed
       // wholesale — the server went away mid-request — leaves rows to retry.
-      if (recorded < rows.length) {
-        for (const entry of batch.slice(recorded)) retry("meta", entry);
-      }
+      if (recorded < rows.length) retryUnfinished("meta", batch);
     } else if (kind === "health") {
       const checked = await workers!.check(rows);
       done.health += checked;
@@ -603,15 +628,11 @@ async function run(kind: TaskKind, batch: Entry[]): Promise<void> {
     } else if (kind === "visual") {
       const recorded = (await workers!.indexVisual?.(rows)) ?? 0;
       done.visual += recorded;
-      if (recorded < rows.length) {
-        for (const entry of batch.slice(recorded)) retry("visual", entry);
-      }
+      if (recorded < rows.length) retryUnfinished("visual", batch);
     } else {
       const recorded = (await workers!.offline?.(rows)) ?? 0;
       done.offline += recorded;
-      if (recorded < rows.length) {
-        for (const entry of batch.slice(recorded)) retry("offline", entry);
-      }
+      if (recorded < rows.length) retryUnfinished("offline", batch);
     }
   } catch (error) {
     // The reason travels with the retry, so that if this unit is eventually abandoned the
@@ -620,8 +641,23 @@ async function run(kind: TaskKind, batch: Entry[]): Promise<void> {
     for (const entry of batch) retry(kind, entry, reason);
   } finally {
     inFlight[kind] -= 1;
+    for (const entry of batch) running[kind].delete(entry.id);
     notify();
     schedule(BACKGROUND_GAP_MS);
+  }
+}
+
+/**
+ * Retries only the rows that still need the pass, judged from the library as it is now.
+ *
+ * A count of "recorded" rows cannot say *which* ones were recorded, and slicing the batch
+ * by that count retried the wrong rows whenever a missing or archived row had been
+ * filtered out first.
+ */
+function retryUnfinished(kind: TaskKind, batch: Entry[]): void {
+  for (const entry of batch) {
+    const row = library.get(entry.id);
+    if (row && !row.archived && needs(kind, row)) retry(kind, entry);
   }
 }
 

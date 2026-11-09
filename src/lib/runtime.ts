@@ -15,7 +15,16 @@
  * second) and again whenever the tab regains focus while something is missing, so
  * installing the extension or starting the server is noticed without a reload.
  */
-import { bridgeConnected, bridgeNeedsApproval, bridgeVersion, onBridgeStatus, waitForBridge } from "./bridge";
+import {
+  bridgeConnected,
+  bridgeNeedsApproval,
+  bridgePageAccess,
+  bridgeVersion,
+  onBridgeStatus,
+  requestBridgePageAccess,
+  waitForBridge,
+} from "./bridge";
+import { log } from "./log";
 import { IS_EXTENSION } from "./env";
 
 export type NetBackend = "extension" | "bridge" | "server" | "offline";
@@ -32,6 +41,12 @@ export interface RuntimeState {
   extensionVersion: string | null;
   /** The extension is installed but this local site still needs to be allowed in it. */
   extensionNeedsApproval: boolean;
+  /**
+   * Whether the extension may read other sites' pages. Asked for on first use rather than
+   * at install; until granted, page reading, link checks and previews wait. Always true
+   * for the local server and when nothing is connected (nothing to ask).
+   */
+  pageAccess: boolean;
   /** Whether the optional local server answered. */
   server: boolean;
   /** Set once the first probe has finished. */
@@ -46,6 +61,8 @@ let state: RuntimeState = IS_EXTENSION
       extension: true,
       extensionVersion: chromeVersion(),
       extensionNeedsApproval: false,
+      // Checked by the first probe; assumed missing so nothing is fetched before then.
+      pageAccess: false,
       server: false,
       probed: true,
     }
@@ -56,6 +73,7 @@ let state: RuntimeState = IS_EXTENSION
       extension: false,
       extensionVersion: null,
       extensionNeedsApproval: false,
+      pageAccess: true,
       server: false,
       probed: false,
     };
@@ -118,8 +136,22 @@ async function pingServer(): Promise<{ ok: boolean; screenshots: boolean }> {
 let probing: Promise<RuntimeState> | null = null;
 
 /** Detects the backend. Safe to call repeatedly; concurrent calls share one probe. */
+async function extensionPageAccess(): Promise<boolean> {
+  try {
+    return await chrome.permissions.contains({ origins: ["<all_urls>"] });
+  } catch (error) {
+    log.warn("runtime.permission-check-failed", { error });
+    return false;
+  }
+}
+
 export function probeRuntime(): Promise<RuntimeState> {
-  if (IS_EXTENSION) return Promise.resolve(state);
+  if (IS_EXTENSION) {
+    return extensionPageAccess().then((pageAccess) => {
+      publish({ ...state, pageAccess });
+      return state;
+    });
+  }
   if (probing) return probing;
   probing = (async () => {
     const [, server] = await Promise.all([waitForBridge(bridgeConnected() ? 0 : 450), pingServer()]);
@@ -138,6 +170,8 @@ export function probeRuntime(): Promise<RuntimeState> {
       extension: bridge,
       extensionVersion: bridge || bridgeNeedsApproval() ? bridgeVersion() : null,
       extensionNeedsApproval: bridgeNeedsApproval(),
+      // The server reads pages itself, so the extension's permission only matters without it.
+      pageAccess: server.ok || !bridge || bridgePageAccess(),
       server: server.ok,
       probed: true,
     });
@@ -151,8 +185,17 @@ export function probeRuntime(): Promise<RuntimeState> {
 let watching = false;
 /** Re-probes when the tab regains focus, so a newly installed extension is noticed. */
 export function watchRuntime(): void {
-  if (watching || IS_EXTENSION || typeof window === "undefined") return;
+  if (watching || typeof window === "undefined") return;
   watching = true;
+  if (IS_EXTENSION) {
+    try {
+      chrome.permissions.onAdded.addListener(() => void probeRuntime());
+      chrome.permissions.onRemoved.addListener(() => void probeRuntime());
+    } catch (error) {
+      log.warn("runtime.permission-watch-failed", { error });
+    }
+    return;
+  }
   const recheck = () => {
     if (document.visibilityState !== "visible") return;
     void probeRuntime();
@@ -167,11 +210,56 @@ export function watchRuntime(): void {
 
 /** Whether other sites can be read from this page at all. */
 export function canReachNetwork(): boolean {
-  return state.net !== "offline";
+  return state.net !== "offline" && state.pageAccess;
+}
+
+/** The extension is connected but has not been allowed to read pages yet. */
+export function needsPageAccess(current: RuntimeState = state): boolean {
+  return (current.net === "extension" || current.net === "bridge") && !current.pageAccess;
+}
+
+/**
+ * Asks for permission to read pages. Must be called straight from a click: Chrome only
+ * shows its prompt for a user gesture, and an `await` before the request loses it.
+ * Resolves to whether access is now granted (always `false` from the website, where the
+ * extension's own window finishes the job and the bridge re-announces).
+ */
+export function requestPageAccess(): Promise<boolean> {
+  if (IS_EXTENSION) {
+    let request: Promise<boolean>;
+    try {
+      request = chrome.permissions.request({ origins: ["<all_urls>"] });
+    } catch (error) {
+      log.warn("runtime.permission-request-failed", { error });
+      return Promise.resolve(false);
+    }
+    return request
+      .then(async (granted) => {
+        await probeRuntime();
+        return granted;
+      })
+      .catch((error: unknown) => {
+        log.warn("runtime.permission-request-failed", { error });
+        return false;
+      });
+  }
+  return requestBridgePageAccess()
+    .then(() => false)
+    .catch((error: unknown) => {
+      log.warn("runtime.permission-request-failed", { error });
+      return false;
+    });
 }
 
 /** Human description of the current backend, for Settings and toasts. */
 export function describeRuntime(current: RuntimeState = state): { title: string; detail: string } {
+  if (needsPageAccess(current)) {
+    return {
+      title: "Allow reading pages",
+      detail:
+        "The extension needs your permission, once, to open the pages you have bookmarked. Until then previews, link checks and page search wait.",
+    };
+  }
   switch (current.net) {
     case "extension":
       return {

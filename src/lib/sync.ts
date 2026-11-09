@@ -38,6 +38,8 @@ export interface CommitNotice {
   changed: string[];
   /** Rows deleted — the receiver drops these. */
   removed: string[];
+  /** Folders, boards, sources, imports or smart collections changed: re-read those too. */
+  shell?: boolean;
   /** Which tab sent it, so a tab ignores its own echo. */
   origin: string;
   at: number;
@@ -80,16 +82,27 @@ function ensureChannel(): BroadcastChannel | null {
   }
 }
 
-/** Announces a set of row-level changes to every other tab. */
-export function announceCommit(change: { changed: string[]; removed: string[] }): void {
-  if (!change.changed.length && !change.removed.length) return;
+/**
+ * Announces a set of row-level changes to every other tab.
+ *
+ * `here` also hands the notice to this tab's own listeners. Changes copied in from the
+ * other copy of the library (website or extension, see `replication.ts`) were written by
+ * this tab, but its screen does not know about them yet.
+ */
+export function announceCommit(
+  change: { changed: string[]; removed: string[]; shell?: boolean },
+  options: { here?: boolean } = {},
+): void {
+  if (!change.changed.length && !change.removed.length && !change.shell) return;
   const notice: CommitNotice = {
     kind: "commit",
     changed: change.changed,
     removed: change.removed,
+    shell: change.shell || undefined,
     origin,
     at: Date.now(),
   };
+  if (options.here) for (const listener of listeners) listener(notice);
   try {
     ensureChannel()?.postMessage(notice);
   } catch {

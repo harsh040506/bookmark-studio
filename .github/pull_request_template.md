@@ -4,6 +4,7 @@
 - [ ] `npm run check`
 - [ ] `npm test`
 - [ ] `npm run build`
+- [ ] `npm run check:site`
 - [ ] Tried it in the browser (which runtime: website / extension / local server?)
 
 **Screenshots** (for anything visual, light and dark)

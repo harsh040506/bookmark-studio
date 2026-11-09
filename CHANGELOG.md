@@ -2,6 +2,40 @@
 
 ## Unreleased
 
+### One library
+- The website and the extension now share one library. Each still keeps its own copy, because browsers give them separate storage, but while the extension is connected, bookmarks, tags, folders, boards, imports and smart collections changed on either side appear on the other within seconds. Deletions carry over and never come back.
+- When both sides changed the same bookmark, the person's latest decision wins for tags, folders, favourites, notes and the trash, and the newest result wins for what pages report. A page read finishing on one side can no longer undo a tag added on the other.
+- The first time the two meet, bookmarks saved at the same address on both sides are combined, with tags from both, instead of showing up twice.
+- Screenshots, offline copies and uploaded files stay in the copy that has their bytes.
+- Switch it off in Settings → Background ("Share one library with the extension").
+
+### Background work
+- Fixed libraries stuck on "filling in" forever. A page saved under several bookmarks was captured again on every pass, results written from an older copy of a row could erase each other (and bring back deleted bookmarks), and a page already being worked on could be queued again. Each page is now fetched once at a time, marked on every bookmark that shares it, and given up on after a few failed tries.
+- Background work keeps going while the tab is in the background, instead of slowing to about one step a minute.
+- Failures stored on bookmarks are plain sentences ("The site took too long to answer") and never include addresses from your network.
+
+### Extension
+- Installing asks only for your bookmarks. Permission to read the pages in your library is asked for the first time it is needed, with **Allow reading pages** in the app.
+- Background capture windows are off by default: cards use the page's own preview image, and a screenshot is still taken when you ask for one. Switch them on in Settings → Background.
+- Firefox 128 or newer: `npm run build` also writes `dist/extension-firefox` and its zip, and releases attach it. Bookmark sync understands Firefox's folders.
+- Browser bookmark sync is on by default once the extension is connected, unless you switch it off, and starts even when the extension connects after the page has opened.
+- New bookmarks appear in your other open tabs straight away. A tab now announces a change only after it is saved, and the others read just the rows that changed.
+- The console no longer fills with "Executing inline event handler violates…" errors while pages are read. Chrome reported one for every `onclick=`-style attribute in a page's HTML as it was parsed, even though none of them ever ran. The smoke test now fails on any Content Security Policy violation.
+- No more "Unchecked runtime.lastError" message when a page moves into the back/forward cache.
+
+### Security
+- Private network addresses written inside IPv6 (`http://[::ffff:127.0.0.1]/`, which the URL parser turns into `[::ffff:7f00:1]`, plus NAT64, 6to4 and Teredo forms) and `localhost.` with a trailing dot are refused by the local server and the extension. One classifier (`shared/ip.ts`) serves both.
+- The local server connects only to an address it has just checked, so DNS rebinding cannot reach your network, and throws away a screenshot of a page that was served from a private address.
+- The extension refuses redirects that end on a private address. Through the bridge, an allowed website can no longer lift the download size limit with an invalid number or save `javascript:` bookmarks into the browser.
+- Addresses with a username or password in them are refused.
+- The local server identifies itself as `BookmarkStudio/5` with a link to this repository.
+
+### Phones
+- Installed on Android, the website appears in the share sheet: share a link from any app and it opens ready to save.
+
+### Code
+- `useLibrary` is split into a core (state, `commit`, undo) and four hooks in `src/hooks/library/`: browser sync, import and export, editing, and background work.
+
 ### Website
 - New [About](https://bookmark-studio-app.vercel.app/about) and [Privacy](https://bookmark-studio-app.vercel.app/privacy) pages, a real "not found" page, and a text introduction that shows while the app starts (and stays readable without JavaScript).
 - Every page has its own title, description, canonical address, link-preview image and structured data. The site publishes `robots.txt`, a sitemap, `llms.txt`, Markdown copies of each page and `security.txt`.

@@ -114,7 +114,9 @@ export interface ServerStatus {
 export async function getServerStatus(): Promise<ServerStatus> {
   const runtime = getRuntime();
   if (runtime.net === "extension" || runtime.net === "bridge") {
-    return { online: true, screenshots: runtime.screenshots };
+    // Without page access every request would fail; report it as not connected so the
+    // background queue waits instead of abandoning the whole library.
+    return { online: runtime.pageAccess, screenshots: runtime.pageAccess && runtime.screenshots };
   }
   if (runtime.net === "offline") return { online: false, screenshots: false };
   try {

@@ -13,9 +13,11 @@
  *   - `capture`   — a screenshot of a public URL, returned as a data URL
  *   - `bookmarks` — one call on `chrome.bookmarks` (getTree, create, update, move, remove…)
  *   - `subscribe` — start forwarding `chrome.bookmarks` change events to this page
+ *   - `library-id`, `library-pull`, `library-push` — swap library changes with the
+ *     extension's own copy (`replication.ts`)
  *
- * So the website gets the same capabilities as the extension's own page, while the library
- * itself stays in the website's storage.
+ * So the website gets the same capabilities as the extension's own page. Each keeps its
+ * own copy of the library, and the two are kept the same.
  *
  * ## The wire
  *
@@ -27,7 +29,17 @@
 export const BRIDGE_CHANNEL = "bookmark-studio/bridge";
 export const BRIDGE_PROTOCOL = 1;
 
-export type BridgeOp = "hello" | "fetch" | "capture" | "bookmarks" | "subscribe" | "request-access";
+export type BridgeOp =
+  | "hello"
+  | "fetch"
+  | "capture"
+  | "bookmarks"
+  | "subscribe"
+  | "request-access"
+  | "request-page-access"
+  | "library-id"
+  | "library-pull"
+  | "library-push";
 
 interface BridgeReply {
   channel: typeof BRIDGE_CHANNEL;
@@ -37,11 +49,11 @@ interface BridgeReply {
   result?: unknown;
   error?: string;
   /** Present on unsolicited announcements. */
-  hello?: { protocol: number; version: string; approved?: boolean };
+  hello?: { protocol: number; version: string; approved?: boolean; pageAccess?: boolean };
   event?: { name: string; args: unknown[] };
 }
 
-let announced: { protocol: number; version: string; approved?: boolean } | null = null;
+let announced: { protocol: number; version: string; approved?: boolean; pageAccess?: boolean } | null = null;
 const statusListeners = new Set<() => void>();
 let nextId = 1;
 const pending = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }>();
@@ -67,7 +79,8 @@ function listen(): void {
     if (!isReply(data)) return;
 
     if (data.hello) {
-      const changed = announced?.approved !== data.hello.approved || !announced;
+      const changed =
+        !announced || announced.approved !== data.hello.approved || announced.pageAccess !== data.hello.pageAccess;
       announced = data.hello;
       for (const wake of helloWaiters) wake();
       helloWaiters.clear();
@@ -102,6 +115,20 @@ export function bridgeNeedsApproval(): boolean {
 }
 
 /** Asks the extension to open its "Allow this site?" window. */
+/**
+ * Whether the extension may read other sites' pages. An extension too old to report it
+ * had that access at install time, so a missing answer means yes.
+ */
+export function bridgePageAccess(): boolean {
+  listen();
+  return announced?.pageAccess !== false;
+}
+
+/** Opens the extension's own window that asks Chrome for page access. */
+export function requestBridgePageAccess(): Promise<unknown> {
+  return bridgeCall("request-page-access", null, 15_000);
+}
+
 export function requestBridgeAccess(): Promise<unknown> {
   return bridgeCall("request-access", null, 15_000);
 }

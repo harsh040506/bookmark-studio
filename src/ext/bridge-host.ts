@@ -4,11 +4,15 @@
  * The content script in `bridge-content.ts` is injected only into the sites listed in
  * `extension/sites.json` (plus the deployed site a release was built for). It relays a
  * fixed set of operations here — a guarded fetch, a screenshot, one `chrome.bookmarks`
- * call — and nothing else is reachable. The sender's URL is checked again on every message,
+ * call, swapping library changes — and nothing else is reachable. The sender's URL is checked again on every message,
  * because a content script is the one part of an extension that shares a process with the
  * page it runs in.
  */
-import { assertPlausiblyPublic, readTruncated } from "../lib/net-guard";
+import { applyChanges, localReplica, readChanges } from "../lib/db";
+import { assertPlausiblyPublic, readTruncated, refuseRedirectInto } from "../lib/net-guard";
+import { readBatch, readCursor } from "../lib/replica";
+import { repairBookmark } from "../lib/repair";
+import { announceCommit } from "../lib/sync";
 
 declare const __BRIDGE_SITES__: string[];
 
@@ -106,6 +110,25 @@ export async function promptForApproval(origin: string): Promise<void> {
   });
 }
 
+let lastPageAccessPrompt = 0;
+/**
+ * Opens the extension's window that asks for page access. Chrome only shows its own
+ * permission dialog in answer to a click on an extension page, so the website cannot ask
+ * directly; this window holds the button.
+ */
+export async function promptForPageAccess(): Promise<void> {
+  const now = Date.now();
+  if (now - lastPageAccessPrompt < 10_000) return;
+  lastPageAccessPrompt = now;
+  await chrome.windows.create({
+    url: chrome.runtime.getURL("approve.html?mode=pages"),
+    type: "popup",
+    width: 440,
+    height: 400,
+    focused: true,
+  });
+}
+
 const MAX_BRIDGE_BYTES = 8 * 1024 * 1024;
 const BOOKMARK_METHODS = new Set(["getTree", "create", "update", "move", "remove", "removeTree"]);
 
@@ -126,11 +149,23 @@ interface FetchPayload {
   maxBytes?: number;
 }
 
+/**
+ * A number from the page, or the fallback. The page is untrusted: `NaN` here once meant a
+ * size ceiling that every comparison passed, so a read had no limit at all.
+ */
+export function clampNumber(value: unknown, fallback: number, min: number, max: number): number {
+  const number = typeof value === "number" && Number.isFinite(value) ? value : fallback;
+  return Math.min(Math.max(number, min), max);
+}
+
 export async function bridgeFetch(payload: FetchPayload) {
+  if (!payload || typeof payload !== "object" || typeof payload.url !== "string") {
+    throw new Error("That request was malformed");
+  }
   const url = assertPlausiblyPublic(payload.url);
   const method = payload.method === "HEAD" ? "HEAD" : "GET";
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), Math.min(payload.timeoutMs ?? 10_000, 60_000));
+  const timer = setTimeout(() => controller.abort(), clampNumber(payload.timeoutMs, 10_000, 1_000, 60_000));
   try {
     const headers: Record<string, string> = {};
     for (const [key, value] of Object.entries(payload.headers ?? {})) {
@@ -146,7 +181,8 @@ export async function bridgeFetch(payload: FetchPayload) {
       cache: "no-store",
       signal: controller.signal,
     });
-    const limit = Math.min(Math.max(payload.maxBytes ?? 2_000_000, 0), MAX_BRIDGE_BYTES);
+    if (response.url) await refuseRedirectInto(response.url, response);
+    const limit = clampNumber(payload.maxBytes, 2_000_000, 0, MAX_BRIDGE_BYTES);
     const body = method === "HEAD" ? new Uint8Array(0) : await readTruncated(response, limit);
     return {
       status: response.status,
@@ -166,10 +202,29 @@ export async function bridgeFetch(payload: FetchPayload) {
 }
 
 export async function bridgeBookmarks(payload: { method: string; args: unknown[] }): Promise<unknown> {
-  const { method, args } = payload;
-  if (!BOOKMARK_METHODS.has(method)) throw new Error(`Unsupported bookmarks call: ${method}`);
+  const method = payload?.method;
+  const args = Array.isArray(payload?.args) ? payload.args : [];
+  if (typeof method !== "string" || !BOOKMARK_METHODS.has(method)) {
+    throw new Error(`Unsupported bookmarks call: ${String(method)}`);
+  }
+  // A site can only write the kinds of address the importers accept; never `javascript:`.
+  if (method === "create" || method === "update") {
+    const details = (method === "create" ? args[0] : args[1]) as { url?: unknown } | undefined;
+    if (details && details.url !== undefined && !isWritableBookmarkUrl(details.url)) {
+      throw new Error("Only web addresses can be saved as bookmarks");
+    }
+  }
   const api = chrome.bookmarks as unknown as Record<string, (...a: unknown[]) => Promise<unknown>>;
-  return api[method].apply(chrome.bookmarks, Array.isArray(args) ? args : []);
+  return api[method].apply(chrome.bookmarks, args);
+}
+
+export function isWritableBookmarkUrl(value: unknown): boolean {
+  if (typeof value !== "string" || value.length > 8192) return false;
+  try {
+    return ["http:", "https:", "ftp:"].includes(new URL(value).protocol);
+  } catch {
+    return false;
+  }
 }
 
 /*
@@ -181,6 +236,55 @@ export async function bridgeBookmarks(payload: { method: string; args: unknown[]
 */
 export const EVENTS_PORT = "bookmark-studio/events";
 const ports = new Set<chrome.runtime.Port>();
+
+/** Sends an event to every connected site. */
+export function forwardEvent(name: string, args: unknown[]): void {
+  for (const port of ports) {
+    try {
+      port.postMessage({ name, args });
+    } catch {
+      ports.delete(port);
+    }
+  }
+}
+
+/** Same name as `LIBRARY_CHANGED_EVENT` in `lib/replication.ts`, kept apart so the
+ *  service worker does not bundle the page-side client. */
+const LIBRARY_CHANGED = "libraryChanged";
+
+const isReplicaId = (value: unknown): value is string => typeof value === "string" && value.length > 0 && value.length <= 200;
+
+/**
+ * The extension's half of sharing one library with a website (see `lib/replication.ts`).
+ *
+ * The extension's library lives in this extension's own database, which the service
+ * worker can open even when no extension window is. Every batch is validated row by row
+ * before it is written; open extension windows are told which rows changed, and other
+ * connected sites are told there is something to collect.
+ */
+export async function bridgeLibrary(op: string, payload: unknown): Promise<unknown> {
+  const body = (payload && typeof payload === "object" ? payload : {}) as Record<string, unknown>;
+  if (op === "library-id") return localReplica();
+  if (op === "library-pull") {
+    if (!isReplicaId(body.requester)) throw new Error("Missing requester");
+    const requester = body.requester;
+    return readChanges(readCursor(body.cursor), (by) => by !== requester, body.fresh === true);
+  }
+  if (op === "library-push") {
+    if (!isReplicaId(body.from)) throw new Error("Missing sender");
+    const batch = readBatch(body, body.from, repairBookmark);
+    const applied = await applyChanges(batch);
+    announceCommit(applied);
+    if (applied.changed.length || applied.removed.length || applied.shell) forwardEvent(LIBRARY_CHANGED, [body.from]);
+    return { changed: applied.changed.length, removed: applied.removed.length };
+  }
+  throw new Error(`Unknown request: ${op}`);
+}
+
+/** The extension's own window wrote to its library: let connected sites collect it. */
+export async function announceLibraryChange(): Promise<void> {
+  forwardEvent(LIBRARY_CHANGED, [await localReplica()]);
+}
 
 export function installBookmarkForwarding(): void {
   chrome.runtime.onConnect.addListener((port) => {
@@ -207,13 +311,12 @@ export function installBookmarkForwarding(): void {
       }
     };
 
-  chrome.bookmarks.onCreated.addListener(forward("onCreated"));
-  chrome.bookmarks.onRemoved.addListener(forward("onRemoved"));
-  chrome.bookmarks.onChanged.addListener(forward("onChanged"));
-  chrome.bookmarks.onMoved.addListener(forward("onMoved"));
-  chrome.bookmarks.onChildrenReordered.addListener(forward("onChildrenReordered"));
-  chrome.bookmarks.onImportBegan.addListener(forward("onImportBegan"));
-  chrome.bookmarks.onImportEnded.addListener(forward("onImportEnded"));
+  // Optional chaining: Firefox lacks the reorder and import events, and a missing event
+  // must not throw and take every other listener in the service worker down with it.
+  const events = chrome.bookmarks as unknown as Record<string, { addListener?: (fn: (...args: unknown[]) => void) => void } | undefined>;
+  for (const name of ["onCreated", "onRemoved", "onChanged", "onMoved", "onChildrenReordered", "onImportBegan", "onImportEnded"]) {
+    events[name]?.addListener?.(forward(name));
+  }
 }
 
 /** Injects the bridge into served sites that were already open when the extension arrived. */

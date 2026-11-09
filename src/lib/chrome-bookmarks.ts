@@ -42,10 +42,27 @@ import { buildFolderPaths } from "./library";
 import { log } from "./log";
 import { getDomain } from "./text";
 
-/** Chrome's fixed root folder ids. Stable across every profile and platform. */
-export const BOOKMARKS_BAR_ID = "1";
-export const OTHER_BOOKMARKS_ID = "2";
-const INVISIBLE_ROOT_ID = "0";
+/**
+ * The root folder ids. Chrome's are "0", "1" and "2" on every profile; Firefox names them
+ * ("root________", "toolbar_____", "unfiled_____"). Learned from the tree on every
+ * reconcile (`learnRootIds`), with Chrome's as the starting values, so the same code files
+ * a new bookmark in the right place in either browser.
+ */
+export let BOOKMARKS_BAR_ID = "1";
+export let OTHER_BOOKMARKS_ID = "2";
+let INVISIBLE_ROOT_ID = "0";
+
+const BAR_IDS = new Set(["1", "toolbar_____"]);
+const OTHER_IDS = new Set(["2", "unfiled_____"]);
+
+export function learnRootIds(root: chrome.bookmarks.BookmarkTreeNode): void {
+  if (!root?.id) return;
+  INVISIBLE_ROOT_ID = root.id;
+  for (const child of root.children ?? []) {
+    if (BAR_IDS.has(child.id)) BOOKMARKS_BAR_ID = child.id;
+    if (OTHER_IDS.has(child.id)) OTHER_BOOKMARKS_ID = child.id;
+  }
+}
 
 export const CHROME_SOURCE_ID = "chrome";
 
@@ -53,8 +70,8 @@ export const CHROME_SOURCE_ID = "chrome";
  * Whether two-way sync with the browser's bookmarks is on.
  *
  * Always inside the extension — there the library *is* the browser's bookmarks. On the
- * website it is opt-in (Settings → Sources), because a person who imported a file into a
- * website did not necessarily ask for that library to start writing into their browser.
+ * website it follows the person's choice, and is on by default once the extension is
+ * connected (`wantsBrowserSync` in `shared/types.ts`).
  */
 let browserSyncAllowed = IS_EXTENSION;
 
@@ -208,6 +225,8 @@ export async function reconcile(
   existingFolders: Folder[],
 ): Promise<ReconcileResult> {
   const [root] = await api().getTree();
+  if (!root) throw new Error("The browser returned no bookmarks tree");
+  learnRootIds(root);
   const existingFolderById = new Map(existingFolders.map((folder) => [folder.id, folder]));
   const existingBookmarkById = new Map(existingBookmarks.map((bookmark) => [bookmark.id, bookmark]));
 
@@ -496,17 +515,18 @@ export function startSync(handlers: ChromeSyncHandlers): () => void {
   bookmarks.onRemoved.addListener(onRemoved);
   bookmarks.onChanged.addListener(onChanged);
   bookmarks.onMoved.addListener(onMoved);
-  bookmarks.onChildrenReordered.addListener(onReordered);
-  bookmarks.onImportBegan.addListener(onImportBegan);
-  bookmarks.onImportEnded.addListener(onImportEnded);
+  // Firefox has neither reorder nor import events; their absence must not stop sync.
+  bookmarks.onChildrenReordered?.addListener(onReordered);
+  bookmarks.onImportBegan?.addListener(onImportBegan);
+  bookmarks.onImportEnded?.addListener(onImportEnded);
 
   return () => {
     bookmarks.onCreated.removeListener(onCreated);
     bookmarks.onRemoved.removeListener(onRemoved);
     bookmarks.onChanged.removeListener(onChanged);
     bookmarks.onMoved.removeListener(onMoved);
-    bookmarks.onChildrenReordered.removeListener(onReordered);
-    bookmarks.onImportBegan.removeListener(onImportBegan);
-    bookmarks.onImportEnded.removeListener(onImportEnded);
+    bookmarks.onChildrenReordered?.removeListener(onReordered);
+    bookmarks.onImportBegan?.removeListener(onImportBegan);
+    bookmarks.onImportEnded?.removeListener(onImportEnded);
   };
 }

@@ -1,4 +1,6 @@
-// Builds the Chrome extension into dist/extension and zips it to dist/bookmark-studio-extension.zip.
+// Builds the extension into dist/extension (Chrome and other Chromium browsers) and
+// dist/extension-firefox, and zips each: dist/bookmark-studio-extension.zip and
+// dist/bookmark-studio-extension-firefox.zip.
 //
 //   1. Vite builds the same app as the website, as the extension's own page (index.html).
 //   2. esbuild bundles the service worker (background.js) and the bridge content script
@@ -6,10 +8,11 @@
 //   3. manifest.json is written from extension/manifest.json with the package version and
 //      those sites filled in.
 //   4. The folder is zipped, ready for "Load unpacked" after unzipping, or the Chrome Web Store.
+//   5. A copy with a Firefox manifest is written beside it and zipped too.
 //
 // Sites: extension/sites.json, plus the deployed website (SITE_URL, or Vercel's production address
 // when built on Vercel) and BRIDGE_SITES (extra comma-separated match patterns).
-import { copyFileSync, createWriteStream, existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, cpSync, createWriteStream, existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import archiver from "archiver";
 import { build as esbuild } from "esbuild";
@@ -18,6 +21,10 @@ import { build } from "vite";
 const ROOT = path.resolve(import.meta.dirname, "..");
 const OUT = path.join(ROOT, "dist", "extension");
 const ZIP = path.join(ROOT, "dist", "bookmark-studio-extension.zip");
+const FIREFOX_OUT = path.join(ROOT, "dist", "extension-firefox");
+const FIREFOX_ZIP = path.join(ROOT, "dist", "bookmark-studio-extension-firefox.zip");
+// A stable id is required for Firefox to keep the extension's storage across updates.
+const GECKO_ID = process.env.GECKO_ID || "bookmark-studio@harsh040506.github.io";
 const pkg = JSON.parse(readFileSync(path.join(ROOT, "package.json"), "utf8"));
 
 /** A site URL as a Chrome match pattern covering that site and everything under it. */
@@ -51,7 +58,7 @@ for (const name of ["manifest.webmanifest", "sw.js"]) rmSync(path.join(OUT, name
 const common = {
   bundle: true,
   format: "iife",
-  target: "chrome116",
+  target: ["chrome116", "firefox128"],
   minify: true,
   legalComments: "none",
   define: { __BRIDGE_SITES__: JSON.stringify(sites) },
@@ -64,6 +71,10 @@ copyFileSync(path.join(ROOT, "extension", "approve.html"), path.join(OUT, "appro
 const manifest = JSON.parse(readFileSync(path.join(ROOT, "extension", "manifest.json"), "utf8"));
 manifest.version = pkg.version.replace(/[^0-9.]/g, "");
 manifest.content_scripts[0].matches = sites;
+// Only Bookmark Studio's own sites are required. Reading other pages is asked for when it
+// is first needed (optional_host_permissions), so installing does not open with a warning
+// about access to every website.
+manifest.host_permissions = [...new Set([...(manifest.host_permissions ?? []), ...sites])];
 if (process.env.REPOSITORY_URL) manifest.homepage_url = process.env.REPOSITORY_URL;
 else if (process.env.VERCEL_GIT_REPO_OWNER && process.env.VERCEL_GIT_REPO_SLUG) {
   manifest.homepage_url = `https://github.com/${process.env.VERCEL_GIT_REPO_OWNER}/${process.env.VERCEL_GIT_REPO_SLUG}`;
@@ -77,23 +88,43 @@ for (const required of ["index.html", "background.js", "bridge.js", "approve.htm
   }
 }
 
-await new Promise((resolve, reject) => {
-  const output = createWriteStream(ZIP);
-  const archive = archiver("zip", { zlib: { level: 9 } });
-  output.on("close", resolve);
-  archive.on("error", reject);
-  archive.pipe(output);
-  archive.directory(OUT, false);
-  void archive.finalize();
-});
+function zip(dir, file) {
+  return new Promise((resolve, reject) => {
+    const output = createWriteStream(file);
+    const archive = archiver("zip", { zlib: { level: 9 } });
+    output.on("close", resolve);
+    archive.on("error", reject);
+    archive.pipe(output);
+    archive.directory(dir, false);
+    void archive.finalize();
+  });
+}
+
+await zip(OUT, ZIP);
+
+/*
+  Firefox: the same files with a manifest Firefox accepts. It runs Manifest V3 background
+  code as an event page (`background.scripts`), not a service worker, needs a gecko id,
+  and treats host access as optional, which the app already asks for on first use.
+*/
+rmSync(FIREFOX_OUT, { recursive: true, force: true });
+cpSync(OUT, FIREFOX_OUT, { recursive: true });
+const firefox = { ...manifest };
+firefox.background = { scripts: ["background.js"] };
+delete firefox.minimum_chrome_version;
+firefox.browser_specific_settings = { gecko: { id: GECKO_ID, strict_min_version: "128.0" } };
+writeFileSync(path.join(FIREFOX_OUT, "manifest.json"), `${JSON.stringify(firefox, null, 2)}\n`);
+await zip(FIREFOX_OUT, FIREFOX_ZIP);
 
 // When the website has been built too, it offers this zip as a same-site download
 // (Settings → Connections), so installing the extension never means leaving the app.
 const WEB = path.join(ROOT, "dist", "web");
 if (existsSync(path.join(WEB, "index.html"))) {
   copyFileSync(ZIP, path.join(WEB, "bookmark-studio-extension.zip"));
-  console.log("[build-extension] copied the zip into dist/web for download from the site");
+  copyFileSync(FIREFOX_ZIP, path.join(WEB, "bookmark-studio-extension-firefox.zip"));
+  console.log("[build-extension] copied both zips into dist/web for download from the site");
 }
 
 console.log(`[build-extension] dist/extension ready (v${manifest.version}), bridge serves: ${sites.join(", ")}`);
 console.log(`[build-extension] zipped to ${path.relative(ROOT, ZIP)}`);
+console.log(`[build-extension] Firefox build in ${path.relative(ROOT, FIREFOX_OUT)}, zipped to ${path.relative(ROOT, FIREFOX_ZIP)}`);

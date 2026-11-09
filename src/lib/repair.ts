@@ -61,6 +61,10 @@ export function repairBookmark(raw: unknown, report?: RepairReport): Bookmark | 
     fix("preview", { ...(isRecord(raw.preview) ? raw.preview : {}), method: "card" } as Bookmark["preview"]);
   }
   if (raw.derivedTags !== undefined && !Array.isArray(raw.derivedTags)) fix("derivedTags", undefined);
+  // A bad stamp would win or lose every merge with the other copy of the library.
+  if (raw.changedAt !== undefined && (typeof raw.changedAt !== "number" || !Number.isFinite(raw.changedAt))) {
+    fix("changedAt", undefined);
+  }
 
   if (changed && report) report.repaired += 1;
   return row;
@@ -128,6 +132,11 @@ export function repairFolders(raw: unknown[], report?: RepairReport): Folder[] {
  * A stored `assetBudgetMb: "abc"` or `NaN` would otherwise flow straight into arithmetic
  * and quietly disable eviction, and a wrong-typed switch would render as the wrong state.
  */
+const ALLOWED_SETTING_VALUES: Record<string, string[]> = {
+  previewDevice: ["desktop", "tablet", "mobile"],
+  lookalikeStrength: ["broad", "balanced", "strict"],
+};
+
 export function repairSettings(stored: unknown): Settings {
   const result: Settings = { ...DEFAULT_SETTINGS };
   if (!isRecord(stored)) return result;
@@ -140,6 +149,10 @@ export function repairSettings(stored: unknown): Settings {
     } else if (typeof value === typeof fallback && !(Array.isArray(fallback) && !Array.isArray(value))) {
       target[key] = value;
     }
+  }
+  // A string of the right type can still be a value nothing understands.
+  for (const [key, allowed] of Object.entries(ALLOWED_SETTING_VALUES)) {
+    if (!allowed.includes(target[key] as string)) target[key] = (DEFAULT_SETTINGS as unknown as Record<string, unknown>)[key];
   }
   // Keys the defaults do not know are kept, so settings written by a newer version survive
   // a visit from an older one.

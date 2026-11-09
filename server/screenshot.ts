@@ -16,7 +16,6 @@
  */
 import crypto from "node:crypto";
 import dns from "node:dns/promises";
-import net from "node:net";
 import fs from "node:fs/promises";
 import { existsSync } from "node:fs";
 import os from "node:os";
@@ -26,7 +25,8 @@ import { intFromEnv } from "./config";
 import { createBreaker } from "./breaker";
 import { logEvent } from "./log";
 import { ABSOLUTE_MAX_TABS, createTabPool, TabPoolTimeout } from "./tab-pool";
-import { assertPublicUrl, isPrivateAddress } from "./safe-fetch";
+import { bareHost, ipFamily, isLocalHostname } from "../shared/ip";
+import { assertPublicUrl, BlockedUrlError, isPrivateAddress } from "./safe-fetch";
 
 export type DeviceName = "desktop" | "tablet" | "mobile";
 
@@ -140,14 +140,14 @@ const dnsVerdicts = new Map<string, { private: boolean; at: number }>();
  * thumbnail; a screenshot that reaches the loopback interface is an SSRF.
  */
 export async function resolvesToPrivateAddress(rawHost: string): Promise<boolean> {
-  const host = rawHost.replace(/^\[|\]$/g, "").toLowerCase();
+  const host = bareHost(rawHost);
   if (!host) return true;
 
-  // Names that never legitimately appear in a public page, refused without a lookup.
-  if (/^(localhost|.*\.local|.*\.internal|.*\.localhost|.*\.home\.arpa)$/i.test(host)) return true;
-
   // A literal address needs no resolution — it is already the thing being checked.
-  if (net.isIP(host)) return isPrivateAddress(host);
+  if (ipFamily(host)) return isPrivateAddress(host);
+
+  // Names that never legitimately appear in a public page, refused without a lookup.
+  if (isLocalHostname(host)) return true;
 
   const cached = dnsVerdicts.get(host);
   if (cached && Date.now() - cached.at < DNS_VERDICT_TTL_MS) return cached.private;
@@ -300,6 +300,18 @@ async function render(page: Page, rawUrl: string, device: DeviceName): Promise<C
     })();
   });
 
+  /*
+    The request filter above resolves names itself, and Chrome resolves them again when it
+    connects, so a rebinding DNS answer could slip between the two. The address Chrome
+    actually connected to is reported on every response; if any of them is private, the
+    page is refused before a single pixel of it is written to disk.
+  */
+  let reachedPrivate = false;
+  page.on("response", (response) => {
+    const ip = response.remoteAddress()?.ip;
+    if (ip && isPrivateAddress(ip)) reachedPrivate = true;
+  });
+
   try {
     await page.goto(rawUrl, { waitUntil: "networkidle2", timeout: NAVIGATION_TIMEOUT });
   } catch {
@@ -340,6 +352,8 @@ async function render(page: Page, rawUrl: string, device: DeviceName): Promise<C
       }`,
     })
     .catch(() => undefined);
+
+  if (reachedPrivate) throw new BlockedUrlError("That page loaded from a private address");
 
   await fs.mkdir(CACHE_DIR, { recursive: true });
   const file = cachePathFor(rawUrl, device);

@@ -15,7 +15,7 @@ labels: bug
 **How you run it**
 - [ ] Website (which address?)
 - [ ] Website with the extension installed
-- [ ] The extension's own page
+- [ ] The extension's own page (Chrome-based browser or Firefox?)
 - [ ] Local server (`npm start` / Docker)
 
 **Browser and version:**

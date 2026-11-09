@@ -118,8 +118,8 @@ export const PAGES = [
               head: ["", "What you get"],
               rows: [
                 ["**The website**", "Nothing to install. Import, search, organise and export. Install it as an app from the address bar and it works offline."],
-                ["**The Chrome extension**", "For Chrome, Edge, Brave, Arc, Opera and Vivaldi. Adds page previews, link checks and full-text search, and keeps your browser's bookmarks in sync both ways."],
-                ["**On your own computer**", "Every capability in any browser, with previews rendered by headless Chrome. Needs Node.js 22 or newer, or Docker."],
+                ["**The browser extension**", "For Chrome, Edge, Brave, Arc, Opera, Vivaldi and Firefox 128 or newer. Adds page previews, link checks and full-text search, keeps your browser's bookmarks in sync both ways, and shares one library with the website."],
+                ["**On your own computer**", "Every capability in any browser, with previews rendered by headless Chrome. Needs Node.js 22.12 or newer, or Docker."],
               ],
             },
           },
@@ -151,11 +151,11 @@ export const PAGES = [
           { h3: "Where are my bookmarks stored?" },
           { p: "In your browser's own storage (IndexedDB), on your device. Clearing this site's data in your browser deletes the library, so export a backup from **Settings** now and then." },
           { h3: "Can I use it on more than one device?" },
-          { p: "Each browser keeps its own library. To move a library, export a backup on one device and import it on the other. With the extension, each browser's own bookmark sync (such as Chrome sync) carries your bookmarks between devices." },
+          { p: "Each browser keeps its own library. To move a library, export a backup on one device and import it on the other. With the extension, each browser's own bookmark sync (such as Chrome sync) carries your bookmarks between devices. Within one browser, the website and the extension share a library." },
           { h3: "Does it work offline?" },
           { p: "Yes. After the first visit the app opens without a connection, and offline copies of pages stay readable." },
           { h3: "Which browsers does it support?" },
-          { p: "The website works in current versions of Chrome, Edge, Firefox and Safari. The extension supports Chromium-based browsers: Chrome, Edge, Brave, Arc, Opera and Vivaldi." },
+          { p: "The website works in current versions of Chrome, Edge, Firefox and Safari. The extension supports Chromium-based browsers (Chrome, Edge, Brave, Arc, Opera and Vivaldi) and Firefox 128 or newer." },
           { h3: "Can I get my bookmarks out again?" },
           { p: "Always. Export to the standard bookmarks HTML file, JSON or CSV at any time." },
         ],
@@ -203,7 +203,7 @@ export const PAGES = [
         heading: "What is stored, and where",
         blocks: [
           { p: "Your library lives in your browser's IndexedDB storage, and a few preferences (such as the theme) live in its local storage. Both belong to this site in your browser only. They are needed for the app to do what you ask, so the app does not show a cookie banner." },
-          { p: "If you use the extension, it keeps its copy of the library in the extension's own storage, in the same browser profile. If you run the local server, rendered previews are cached on your own disk, in a folder you can delete." },
+          { p: "If you use the extension, it keeps its copy of the library in the extension's own storage, in the same browser profile. While the extension is connected to this site, the two copies swap changes so they stay the same (you can switch this off in **Settings → Background**). That exchange happens inside your browser and never touches the network. Screenshots and offline copies stay in the copy that made them. If you run the local server, rendered previews are cached on your own disk, in a folder you can delete." },
         ],
       },
       {
@@ -227,8 +227,9 @@ export const PAGES = [
           {
             ul: [
               "**Bookmarks**, to keep your browser's bookmarks and Bookmark Studio in step.",
-              "**Access to websites**, to read pages, check links and capture previews of the sites in your library. It does not read the pages you browse.",
-              "**Tabs and scripting**, to capture a preview in a short-lived window and to connect to the Bookmark Studio website when it is open.",
+              "**Access to websites**, asked for the first time it is needed rather than at install, to read pages, check links and capture previews of the sites in your library. It does not read the pages you browse.",
+              "**Tabs and scripting**, to capture a preview in a short-lived window when you ask for one (background capture windows are off unless you switch them on) and to connect to the Bookmark Studio website when it is open.",
+              "**Storage**, so the library and its pictures are not cut off by the browser's default storage limit.",
             ],
           },
         ],
@@ -240,7 +241,7 @@ export const PAGES = [
           {
             ul: [
               "**Export** everything at any time from **Settings** as HTML, JSON or CSV.",
-              "**Delete** everything with **Settings → Clear library**, or by clearing this site's data in your browser. Removing the extension deletes its copy.",
+              "**Delete** everything with **Settings → Clear library**, or by clearing this site's data in your browser. While the website and the extension share a library, clearing it in one clears both. Removing the extension deletes its copy.",
               "**Copy diagnostics** in **Settings → About** copies recent errors for a bug report. It stays on your clipboard until you choose to paste it somewhere, and web addresses in it are cut to the site name.",
             ],
           },

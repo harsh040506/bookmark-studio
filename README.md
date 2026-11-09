@@ -12,7 +12,7 @@ then search them properly, see every page at a glance, and clear out the dead li
 [![CI](https://github.com/harsh040506/bookmark-studio/actions/workflows/ci.yml/badge.svg)](https://github.com/harsh040506/bookmark-studio/actions/workflows/ci.yml)
 [![MIT licence](https://img.shields.io/badge/licence-MIT-1f1e1d)](LICENSE)
 
-**[Open the app](https://bookmark-studio-app.vercel.app)** · [Get the extension](#the-chrome-extension) · [Run it yourself](#on-your-own-computer) · [Privacy](https://bookmark-studio-app.vercel.app/privacy)
+**[Open the app](https://bookmark-studio-app.vercel.app)** · [Get the extension](#the-browser-extension) · [Run it yourself](#on-your-own-computer) · [Privacy](https://bookmark-studio-app.vercel.app/privacy)
 
 No account · No tracking · No AI · Works offline
 
@@ -128,15 +128,19 @@ Nothing to install. Import, search, organise, tag and export. Install it from th
 
 A web page can't read other websites on its own, so page previews, link checks and full-text search need the extension or the local server. The app tells you plainly which one you're using and what each adds.
 
-### The Chrome extension
+### The browser extension
 
-For Chrome, Edge, Brave, Arc, Opera and Vivaldi. It adds previews, link checks and full-text search, and **keeps your browser's bookmarks in sync both ways**: star a page in Chrome and it appears here; tidy it here and Chrome follows. With the extension installed, the website gets every capability too.
+For Chrome, Edge, Brave, Arc, Opera, Vivaldi and Firefox 128 or newer. It adds previews, link checks and full-text search, and **keeps your browser's bookmarks in sync both ways**: star a page in Chrome and it appears here; tidy it here and Chrome follows. With the extension installed, the website gets every capability too, and **the website and the extension share one library**.
 
-**Install:** [download the extension](https://bookmark-studio-app.vercel.app/bookmark-studio-extension.zip) (also in the app under **Settings → Connections**). Unzip it, open `chrome://extensions`, turn on **Developer mode**, and choose **Load unpacked**.
+Installing asks only for your bookmarks. Permission to read the pages in your library is asked for the first time it's needed, so the install prompt doesn't warn about access to every website.
+
+**Chrome, Edge and other Chromium browsers:** [download the extension](https://bookmark-studio-app.vercel.app/bookmark-studio-extension.zip) (also in the app under **Settings → Connections**). Unzip it, open `chrome://extensions`, turn on **Developer mode**, and choose **Load unpacked**.
+
+**Firefox:** [download the Firefox build](https://bookmark-studio-app.vercel.app/bookmark-studio-extension-firefox.zip), open `about:debugging`, choose **This Firefox → Load Temporary Add-on**, and pick the zip. Firefox removes unsigned add-ons when it restarts, so this is for trying it out until a signed version is published.
 
 ### On your own computer
 
-Every capability in **any** browser, with previews rendered by headless Chrome or Edge. Needs [Node.js](https://nodejs.org) 22 or newer.
+Every capability in **any** browser, with previews rendered by headless Chrome or Edge. Needs [Node.js](https://nodejs.org) 22.12 or newer.
 
 ```bash
 git clone https://github.com/harsh040506/bookmark-studio.git
@@ -158,8 +162,10 @@ docker run --rm -p 127.0.0.1:5174:5174 bookmark-studio
 | Works offline, installable | ✓ | ✓ | ✓ | ✓ |
 | Full-text search, link checks | | ✓ | ✓ | ✓ |
 | Page previews, offline copies | | ✓ | ✓ | ✓ (headless) |
-| Two-way sync with browser bookmarks | | ✓ (opt-in) | ✓ | with the extension |
-| Firefox and Safari | ✓ | | | ✓ |
+| Two-way sync with browser bookmarks | | ✓ (on by default) | ✓ | with the extension |
+| One library shared with the extension | | ✓ | ✓ | with the extension |
+| Firefox | ✓ | ✓ (128+) | ✓ (128+) | ✓ |
+| Safari | ✓ | | | ✓ |
 
 ## Everything else it does
 
@@ -173,13 +179,14 @@ docker run --rm -p 127.0.0.1:5174:5174 bookmark-studio
 - **Keep the page itself:** offline copies stay readable with the network off.
 - **Notes and highlights** on any bookmark.
 - **A command palette** (`Ctrl K` or `⌘ K`) for every bookmark, folder and command, and full keyboard control: press `?` for the shortcuts.
+- **Save from your phone:** install the website on Android and share a link to Bookmark Studio from any app.
 - **Share without uploading:** export to the standard bookmarks file, JSON or CSV, or share a view as a single web page with the pictures inside.
 - **Undo for everything destructive**, and an activity log of what changed.
 - **Light and dark themes**, and reduced motion when your system asks for it.
 
 ## Private by design
 
-- **Your library never leaves your browser.** It lives in IndexedDB on your device. There's no account, no sync service and no analytics.
+- **Your library never leaves your browser.** It lives in IndexedDB on your device. There's no account, no sync service and no analytics. When the website and the extension share a library, they swap changes inside the browser.
 - **The only network requests go to the sites in your library**, and only when you've connected the extension or the local server. They carry no cookies and no referrer.
 - **No AI.** Categories come from rules, tags from a list of topics, "similar" from word statistics and "looks like" from image fingerprints. Nothing you save is sent to a model.
 
@@ -202,7 +209,9 @@ The library is stored by your browser, so clearing this site's data deletes it. 
 <details>
 <summary><b>Can I use it on more than one device?</b></summary>
 
-Each browser keeps its own library. Move one with a backup file, or use the extension: your browser's own bookmark sync (such as Chrome sync) then carries your bookmarks between devices.
+Each browser keeps its own library. To move one, export a backup on one device and import it on the other. With the extension, your browser's own bookmark sync (such as Chrome sync) carries your bookmarks between devices.
+
+Within one browser, the website and the extension share a library: while the extension is connected, changes on either side appear on the other.
 </details>
 
 <details>
@@ -224,7 +233,7 @@ npm install
 npm run dev          # app + local API at http://localhost:5173, with hot reload
 npm test             # unit tests
 npm run check        # TypeScript, client and server
-npm run build        # dist/web, dist/extension (+ zip), dist/server
+npm run build        # dist/web, dist/extension and dist/extension-firefox (+ zips), dist/server
 npm run check:site   # the public pages: tags, links, sitemap, structured data, size budgets
 npm run test:smoke   # loads the built extension and website in a real Chrome and drives both
 ```

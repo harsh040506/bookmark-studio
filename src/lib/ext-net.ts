@@ -24,6 +24,7 @@ import {
   readCapped,
   readTruncated,
 } from "./net-guard";
+import { INERT_HANDLER_PREFIX, inertHtml } from "./inert-html";
 
 const MAX_HTML_BYTES = 1_500_000;
 const MAX_FAVICON_BYTES = 200_000;
@@ -81,7 +82,7 @@ function absoluteUrl(href: string | null | undefined, base: string): string | un
 
 /** Reads a page's own title, description, headings and body text via `DOMParser`. */
 function extractMetadata(html: string, finalUrl: string): Omit<PageMetadata, "url"> {
-  const doc = new DOMParser().parseFromString(html, "text/html");
+  const doc = new DOMParser().parseFromString(inertHtml(html), "text/html");
 
   const title =
     metaContent(doc, 'meta[property="og:title"]') ||
@@ -562,7 +563,7 @@ export async function extSnapshot(target: string): Promise<SnapshotOutcome> {
     return { html: "", bytes: 0, inlined: 0, skipped: 0, error: describeFetchFailure(error) };
   }
 
-  const doc = new DOMParser().parseFromString(html, "text/html");
+  const doc = new DOMParser().parseFromString(inertHtml(html), "text/html");
   const base = doc.querySelector("base[href]")?.getAttribute("href");
   const documentBase = (() => {
     try {
@@ -578,7 +579,8 @@ export async function extSnapshot(target: string): Promise<SnapshotOutcome> {
   doc.querySelectorAll("script, noscript").forEach((el) => el.remove());
   doc.querySelectorAll("*").forEach((element) => {
     for (const attribute of [...element.attributes]) {
-      if (/^on/i.test(attribute.name)) element.removeAttribute(attribute.name);
+      const name = attribute.name.toLowerCase();
+      if (name.startsWith("on") || name.startsWith(INERT_HANDLER_PREFIX)) element.removeAttribute(attribute.name);
     }
   });
 

@@ -4,6 +4,7 @@ This is the map for contributors. Read the README first for what the app does; t
 
 - [One codebase, three runtimes](#one-codebase-three-runtimes)
 - [The extension bridge](#the-extension-bridge)
+- [One library, two copies](#one-library-two-copies)
 - [The client: the library lives in the browser](#the-client-the-library-lives-in-the-browser)
 - [Importing: 28 sources, one pipeline](#importing-28-sources-one-pipeline)
 - [Built for scale](#built-for-scale)
@@ -21,12 +22,18 @@ The same React app ships three ways. The only thing that changes between them is
 
 | Running as | Network (pages, links, images) | Screenshots | Browser bookmarks |
 | --- | --- | --- | --- |
-| The extension's own page | direct `fetch` (host permissions lift CORS) | a brief, unfocused capture window | two-way, always on |
-| The website, extension installed | relayed through the bridge | capture window, via the bridge | two-way, opt-in |
+| The extension's own page | direct `fetch`, once page access is allowed (host permissions lift CORS) | a brief, unfocused capture window | two-way, always on |
+| The website, extension installed | relayed through the bridge | capture window, via the bridge | two-way, on unless switched off |
 | The website, served by the local server | `/api/*` on the same origin | headless Chrome or Edge | via the extension, if installed |
 | The website on its own | none: those features say how to switch them on | none | none |
 
 Everything else — importing, searching, organising, smart collections, exporting, undo, and the visual index of pictures already stored — runs entirely in the tab and is identical in every row.
+
+**Page access is asked for, not assumed.** The extension's manifest lists `<all_urls>` under `optional_host_permissions`, so installing asks only for bookmarks. The first time something needs to read a page, the app offers **Allow reading pages**, which calls `chrome.permissions.request` from that click (on the website, through a small extension window, because only an extension page may ask). Until then, page reading, link checks and previews wait, and the runtime says why.
+
+**Capture windows are opt-in.** An extension can only photograph a page in a real window. Background captures in the extension are off unless **Capture in the background with small windows** is switched on; cards use the page's own preview image instead, and a screenshot is still taken when the person asks for one. The local server's headless renderer has no window and is not affected.
+
+**Firefox** runs the same code from `dist/extension-firefox`: Manifest V3 with an event page (`background.scripts`) instead of a service worker, a fixed add-on id, and Firefox's named bookmark folders (`toolbar_____`, `unfiled_____`), which `src/lib/chrome-bookmarks.ts` learns from the tree at sync time.
 
 **Where the decision lives.** `src/lib/runtime.ts` works out the backend before the first paint, in well under a second. It waits up to ~450 ms for the bridge's hello and pings `api/ping` on the same origin. It runs again when the tab regains focus, so installing the extension or starting the server is noticed without a reload. `src/lib/api.ts` asks the runtime which implementation to call for each capability:
 
@@ -49,10 +56,19 @@ When both the server and the extension are present, the server carries the netwo
 ```
 
 - **Where it runs.** The content script is injected only into the sites in `extension/sites.json` (localhost and 127.0.0.1 by default), plus the deployed site the build was made for (`SITE_URL`). It is also injected into tabs of those sites that were already open when the extension was installed.
-- **What it can do.** A fixed list of operations: `hello`, `fetch` (a guarded GET/HEAD of a public URL; body returned as base64, capped at 8 MB), `capture` (a screenshot as a data URL), `bookmarks` (one call among getTree, create, update, move, remove, removeTree) and `subscribe` (forward `chrome.bookmarks` events).
-- **How it checks.** Both ends accept only messages from the same window and origin, tagged with the channel `bookmark-studio/bridge`. The service worker re-checks the sender's URL against the served sites on every message, applies `assertPlausiblyPublic` to every fetch, strips request headers down to `accept`, `accept-language` and `range`, and sends no cookies.
+- **What it can do.** A fixed list of operations: `hello`, `fetch` (a guarded GET/HEAD of a public URL; body returned as base64, capped at 8 MB), `capture` (a screenshot as a data URL), `bookmarks` (one call among getTree, create, update, move, remove, removeTree), `subscribe` (forward `chrome.bookmarks` and library events), `request-access` and `request-page-access` (open the extension's own approval windows), and `library-id`, `library-pull` and `library-push` (below).
+- **How it checks.** Both ends accept only messages from the same window and origin, tagged with the channel `bookmark-studio/bridge`. A local address (localhost, 127.0.0.1) is served only after the person allows that exact origin once. The service worker re-checks the sender's URL on every message, validates every payload (a fetch's timeout and size are clamped; a bookmark can only be written with an `http`, `https` or `ftp` address), applies `assertPlausiblyPublic` to every fetch and to where its redirects end, strips request headers down to `accept`, `accept-language` and `range`, and sends no cookies.
 - **Events.** Bookmark listeners are registered at the top level of the service worker so a change wakes it. When the worker restarts, the content script reconnects and tells the page. The page then reconciles from the whole tree instead of trusting that no event was missed.
-- **Bookmarks shim.** `src/lib/bookmarks-api.ts` gives back an object shaped like `chrome.bookmarks`: the real one inside the extension, or a bridge-backed proxy on the website. `src/lib/chrome-bookmarks.ts` therefore runs the same two-way sync in both places. On the website it is opt-in (Settings → Connections), because a library imported from a file shouldn't start writing into the browser unasked. Rows synced from the browser carry `sourceId: "chrome"`; a "replace" import never deletes them.
+- **Bookmarks shim.** `src/lib/bookmarks-api.ts` gives back an object shaped like `chrome.bookmarks`: the real one inside the extension, or a bridge-backed proxy on the website. `src/lib/chrome-bookmarks.ts` therefore runs the same two-way sync in both places. On the website it starts as soon as the extension is connected, unless the person has switched it off (`wantsBrowserSync` in `shared/types.ts`). Rows synced from the browser carry `sourceId: "chrome"`; a "replace" import never deletes them.
+
+## One library, two copies
+
+A browser gives a website and an extension separate storage, so each keeps its own copy of the library in its own IndexedDB. While the extension is connected (and **Share one library with the extension** is on), the copies swap changes. Nothing crosses the network: both live in the same browser profile.
+
+- **Stamps and tombstones** (`src/lib/db.ts`). Every write stamps the record with when it was written and by which copy (`syncAt`, `syncBy`, stripped on read like the other index fields), and every delete leaves a tombstone. A `["syncAt", "id"]` index answers "what changed since we last spoke".
+- **The exchange** (`src/lib/replication.ts`). The website drives it, because it is the side that can reach the other. Each round pulls the extension's changes page by page (`library-pull`, at most 400 rows or 3 MB a page), merges them, then pushes its own (`library-push`). Each side remembers how far it has read. A round runs when the extension connects, after a write on either side (the extension's page tells its service worker, which tells connected sites), when the tab comes back into view, and once a minute. Web Locks keep it to one tab per site; failures back off.
+- **The merge** (`src/lib/replica.ts`, pure and tested). The newer stamp wins, except that the fields a person decides (tags, folder, favourite, trash, notes, a hand-written title) follow `changedAt`, the person's last change, which `commit` sets and background work never does. A page read finishing on one side therefore cannot undo a tag added on the other. The first time two copies meet, bookmarks with the same address are combined instead of duplicated. Screenshots, offline copies and uploaded files are files only one copy has, so those fields never travel.
+- **Trust.** The service worker validates every pushed row with the same repair used for stored records and accepts only `http`, `https` and `ftp` addresses. Open extension windows learn about applied changes through the same `BroadcastChannel` notice other tabs use.
 
 ## The client: the library lives in the browser
 
@@ -60,7 +76,8 @@ The library lives in IndexedDB (`src/lib/db.ts`). `localStorage` isn't viable: a
 
 | Module | Responsibility |
 | --- | --- |
-| `hooks/useLibrary.ts` | The single source of truth. Every mutation goes through `commit`, which gives persistence, an undo entry and an activity record in one place. Also owns importing (`previewImport`, `importFile`, backup restore) and browser sync. |
+| `hooks/useLibrary.ts` | The single source of truth, composed from `hooks/library/`: `core.ts` (state, derivations, and `commit`, which gives persistence, an undo entry and an activity record in one place), `browser-sync.ts`, `import-export.ts` (imports, backups, exports, uploads), `editing.ts` and `background-work.ts` (jobs and the pipeline). |
+| `lib/replica.ts`, `lib/replication.ts` | One library across the website and the extension: merge rules, and the exchange over the bridge. |
 | `lib/engine.ts` | Selection. It builds the index, answers every filter, sort and search, and counts every facet. Nothing else in the app filters an array. |
 | `lib/import/` | The 28-source import pipeline (below). |
 | `lib/query.ts` | Search parsing: operators (`tag:`, `site:`, `is:`, `has:`, `kind:`, `color:`, `before:`) *and* plain English ("saved last month", "never opened"). |
@@ -74,7 +91,7 @@ The library lives in IndexedDB (`src/lib/db.ts`). `localStorage` isn't viable: a
 
 **Undo is a diff, not a snapshot.** An entry stores only the fields that changed, so forty entries don't hold hundreds of megabytes of favicons. Deletions are the exception and carry the whole row.
 
-**A second tab is reconciled, not clobbered** (`lib/sync.ts`). Per-row changes are re-read from the database; a whole-library replace reloads.
+**A second tab is reconciled, not clobbered** (`lib/sync.ts`). A tab announces a change only after it is saved; the others re-read just the changed rows (and the folders and boards, when those changed). A whole-library replace reloads.
 
 ## Importing: 28 sources, one pipeline
 
@@ -108,7 +125,11 @@ A page is processed as soon as it appears (on import, paste or undo) by up to fi
 - index pictures;
 - save an offline copy (off by default).
 
-The passes share one queue (`lib/pipeline.ts`). What's on screen goes first. The queue is paced with a token bucket, capped per pass, suspended when the tab is hidden or nothing is connected, and stands down while a job you started is running. Each pass stamps its result on the bookmark (`preview.shotAt`, `meta.fetchedAt`, `health.checkedAt`), so work survives a reload. A failure is stamped as attempted, with a reason, and listed for retry.
+The passes share one queue (`lib/pipeline.ts`). What's on screen goes first. The queue is paced with a token bucket, capped per pass, paused when nothing is connected, and stands down while a job you started is running. It keeps going when the tab is in the background: Chrome slows a hidden tab's timers to about once a minute, so the queue waits on a timer in a small worker instead (`lib/wake.ts`).
+
+- **Nothing is fetched twice at once.** A row being worked on is not queued again, and a page saved under several bookmarks is captured once and marked on all of them.
+- **Results never overwrite newer changes.** Work can take seconds while the library keeps changing, so each result is applied as the fields that work changed, onto the row as it is now (`lib/rebase.ts`). A row deleted in the meantime stays deleted.
+- **Work survives a reload.** Each pass stamps its result on the bookmark (`preview.shotAt`, `meta.fetchedAt`, `health.checkedAt`). A failure is stamped as attempted with a plain reason (`lib/failure.ts`), retried a few times, then listed for retry.
 
 ## Images live in the app, not the browser cache
 
@@ -132,7 +153,7 @@ The interface uses one design system, summarised in [DESIGN.md](DESIGN.md):
 | --- | --- |
 | `npm run build:web` | `dist/web`: the website / PWA, with a generated service worker (`scripts/build-web.mjs`) |
 | `npm run build:vercel` | the website plus the extension zip beside it, for download from the site (used by `vercel.json`) |
-| `npm run build:extension` | `dist/extension` and `dist/bookmark-studio-extension.zip`. esbuild bundles `background.js` and `bridge.js` with the served sites compiled in, and `manifest.json` is written from `extension/manifest.json`. If `dist/web` exists, the zip is copied into it for download from the site. |
+| `npm run build:extension` | `dist/extension` and `dist/extension-firefox`, each with a zip. esbuild bundles `background.js`, `bridge.js` and `approve.js` with the served sites compiled in, and `manifest.json` is written from `extension/manifest.json` (the Firefox copy gets an event page and a gecko id, overridable with `GECKO_ID`). If `dist/web` exists, both zips are copied into it for download from the site. |
 | `npm run build:server` | `dist/server/server.js`, which serves `dist/web` plus `/api/*` |
 | `npm start` | builds whatever is stale, then runs the server and opens the browser (`scripts/start.mjs`) |
 
@@ -149,11 +170,12 @@ src/
     ui/                   design-system primitives on Radix (button, menu, dialog, select…)
     icons.tsx             the Hugeicons set
   hooks/                  useLibrary, useTheme, useRuntime, useAsset
+    library/              core (state, commit, undo), browser-sync, import-export, editing, background-work
   lib/                    engine, import, query, tfidf, visual, pipeline, assets, runtime, bridge…
   ext/                    extension service worker, bridge host and content script
   styles/                 tokens.css, ui.css, doc.css (design system) + app.css
 server/                   the local server (Express + puppeteer-core)
-shared/types.ts           types shared by the client and the server
+shared/                   types and the private-address classifier, shared by the client and the server
 extension/                manifest template and the list of sites the bridge serves
 scripts/                  build, start, icons, smoke test
 docs/                     this file, the design rules, screenshots

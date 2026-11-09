@@ -14,7 +14,7 @@ export const IS_EXTENSION: boolean =
   typeof chrome.runtime.id === "string" &&
   chrome.runtime.id.length > 0 &&
   typeof location !== "undefined" &&
-  location.protocol === "chrome-extension:";
+  (location.protocol === "chrome-extension:" || location.protocol === "moz-extension:");
 
 /** The Chrome Web Store page for the companion extension, when one has been published. */
 export const EXTENSION_STORE_URL: string = import.meta.env.VITE_EXTENSION_STORE_URL ?? "";

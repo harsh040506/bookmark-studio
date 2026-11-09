@@ -213,6 +213,16 @@ export interface Bookmark {
    * overwrite a title or description someone deliberately wrote.
    */
   editedAt?: number;
+  /**
+   * When the person last changed anything about this row: a tag, a folder, a favourite,
+   * the trash. Background reads never set it.
+   *
+   * The website and the extension each keep a copy of the library and swap changes. When
+   * both changed the same row before they next spoke, this says whose copy holds the
+   * person's latest decision, so a page read on one side cannot undo a tag added on the
+   * other. `editedAt` is narrower (hand-written titles and descriptions) and stays as is.
+   */
+  changedAt?: number;
   favorite?: boolean;
   archived?: boolean;
   /**
@@ -512,10 +522,35 @@ export interface Settings {
    * Two-way sync with the browser's own bookmarks, on the website.
    *
    * Always on inside the extension (there the library *is* the browser's bookmarks). On the
-   * website it needs the extension installed and is opt-in, because a library imported from
-   * a file should not start writing into the browser without being asked.
+   * website it needs the extension installed, and only counts once the person has chosen
+   * (`browserSyncChosen`); until then sync follows the extension. See `wantsBrowserSync`.
    */
   browserSync: boolean;
+  /**
+   * Whether the person has ever switched browser sync on or off themselves.
+   *
+   * Until they have, sync follows the extension: connected means on. People install the
+   * extension to get their bookmarks in, and having to find a second switch afterwards was
+   * the most common reason new bookmarks never showed up.
+   */
+  browserSyncChosen: boolean;
+  /**
+   * Whether the extension may open small capture windows in the background.
+   *
+   * A browser extension can only photograph a page by opening it in a real window, and
+   * people found those windows flickering in the corner distracting. Off by default: the
+   * page's own preview image is used instead, and a screenshot is taken when asked for. The
+   * local server's headless renderer is invisible, so it is not affected by this switch.
+   */
+  captureWithWindows: boolean;
+  /**
+   * Whether the website and the extension share one library.
+   *
+   * Browsers give a website and an extension separate storage, so without this each kept
+   * its own library and only bookmarks synced through Chrome appeared in both. On: while
+   * the extension is connected, changes on either side are copied to the other.
+   */
+  shareWithExtension: boolean;
   /** Whether the first-run welcome has been dismissed. */
   welcomed: boolean;
 }
@@ -539,8 +574,16 @@ export const DEFAULT_SETTINGS: Settings = {
   searchDebounceMs: 120,
   lookalikeStrength: "balanced",
   browserSync: false,
+  browserSyncChosen: false,
+  captureWithWindows: false,
+  shareWithExtension: true,
   welcomed: false,
 };
+
+/** Whether browser sync should run when the extension is reachable: on unless switched off. */
+export function wantsBrowserSync(settings: Pick<Settings, "browserSync" | "browserSyncChosen">): boolean {
+  return settings.browserSyncChosen ? settings.browserSync : true;
+}
 
 /** Result of scraping a page — server side, cheerio only. */
 export interface PageMetadata {

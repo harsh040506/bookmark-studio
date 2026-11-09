@@ -2,6 +2,7 @@ node_modules/
 dist/
 .cache/
 .smoke-profile*/
+.smoke-extension/
 /screenshots/
 *.local
 *.log

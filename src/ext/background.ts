@@ -1,8 +1,9 @@
 /**
  * The extension's background service worker.
  *
- * Two jobs, and only two: open the app when the toolbar icon is clicked, and capture a
- * screenshot when the app asks for one.
+ * It opens the app when the toolbar icon is clicked, captures a screenshot when the app
+ * asks for one, and answers the website bridge (`bridge-host.ts`): guarded fetches,
+ * browser bookmarks, and the extension's half of the shared library.
  *
  * ## Why a screenshot is a real tab, not a headless render
  *
@@ -34,7 +35,10 @@
  */
 import { assertPlausiblyPublic, BlockedUrlError } from "../lib/net-guard";
 import {
+  promptForPageAccess,
+  announceLibraryChange,
   bridgeBookmarks,
+  bridgeLibrary,
   bridgeFetch,
   injectIntoOpenTabs,
   installBookmarkForwarding,
@@ -51,6 +55,32 @@ const DEVICES: Record<DeviceName, { width: number; height: number }> = {
   tablet: { width: 834, height: 1112 },
   mobile: { width: 414, height: 896 },
 };
+
+/* ------------------------------------------------------------- page access */
+
+const ALL_PAGES = { origins: ["<all_urls>"] };
+
+/**
+ * Whether Chrome has granted access to other sites' pages.
+ *
+ * Optional since this version, so the install prompt does not warn about every website.
+ * Every request that needs it checks first and fails with a message the app can turn into
+ * an "Allow" button, rather than a CORS error nobody can act on.
+ */
+async function hasPageAccess(): Promise<boolean> {
+  try {
+    return await chrome.permissions.contains(ALL_PAGES);
+  } catch {
+    return false;
+  }
+}
+
+const NO_PAGE_ACCESS = "Bookmark Studio needs permission to read pages. Allow it once from the app.";
+
+// Content scripts cannot see permission changes; a storage write wakes them to re-announce.
+const notePageAccessChange = () => void chrome.storage.local.set({ pageAccessChangedAt: Date.now() }).catch(() => undefined);
+chrome.permissions.onAdded.addListener(notePageAccessChange);
+chrome.permissions.onRemoved.addListener(notePageAccessChange);
 
 const NAVIGATION_TIMEOUT_MS = 20_000;
 const SETTLE_DELAY_MS = 2_000;
@@ -231,6 +261,8 @@ async function captureOnce(
     };
   }
 
+  if (!(await hasPageAccess())) return { ok: false, error: NO_PAGE_ACCESS, kind: "blocked" };
+
   const viewport = DEVICES[device] ?? DEVICES.desktop;
   // Read before `acquire()`: this only touches the asking tab, not the capture window, so
   // there's no reason to make it wait behind other captures for a semaphore slot.
@@ -242,13 +274,19 @@ async function captureOnce(
   let stopWaiting: (() => void) | undefined;
   try {
     const run = (async (): Promise<CaptureOk> => {
-      creating = chrome.windows.create({
+      const options: chrome.windows.CreateData = {
         url: rawUrl,
         type: "popup",
         width: viewport.width,
         height: viewport.height,
         focused: false,
         ...corner,
+      };
+      // Some browsers (older Firefox) reject `focused: false`; a focused window that closes
+      // itself is better than no preview at all.
+      creating = chrome.windows.create(options).catch(() => {
+        const { focused: _focused, ...rest } = options;
+        return chrome.windows.create(rest);
       });
       const win = await creating;
       if (win.id !== undefined) void rememberWindow(win.id, true);
@@ -320,12 +358,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true; // keep the message channel open for the async response
   }
 
+  if (message.type === "library-changed") {
+    // From the extension's own window only: its library changed.
+    if (!sender.url?.startsWith(chrome.runtime.getURL(""))) return undefined;
+    void announceLibraryChange().catch(() => undefined);
+    return undefined;
+  }
+
   if (message.type === "bridge-status") {
     if (!isServedUrl(sender.url)) {
       sendResponse({ served: false, approved: false });
       return undefined;
     }
-    void isApproved(sender.url).then((approved) => sendResponse({ served: true, approved }));
+    void Promise.all([isApproved(sender.url), hasPageAccess()]).then(([approved, pageAccess]) =>
+      sendResponse({ served: true, approved, pageAccess }),
+    );
     return true;
   }
 
@@ -343,8 +390,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (!(await isApproved(sender.url))) {
         throw new Error("This site hasn't been allowed to use the Bookmark Studio extension yet.");
       }
+      if (message.op === "request-page-access") {
+        if (!(await hasPageAccess())) await promptForPageAccess();
+        return true;
+      }
       switch (message.op) {
         case "fetch":
+          if (!(await hasPageAccess())) throw new Error(NO_PAGE_ACCESS);
           return bridgeFetch(message.payload);
         case "capture": {
           const { url, device } = message.payload as { url: string; device: DeviceName };
@@ -352,6 +404,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         }
         case "bookmarks":
           return bridgeBookmarks(message.payload);
+        case "library-id":
+        case "library-pull":
+        case "library-push":
+          return bridgeLibrary(message.op, message.payload);
         default:
           throw new Error(`Unknown request: ${String(message.op)}`);
       }

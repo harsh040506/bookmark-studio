@@ -127,6 +127,7 @@ describe("runtime descriptions", () => {
     extension: false,
     extensionVersion: null,
     extensionNeedsApproval: false,
+    pageAccess: true,
     server: false,
     probed: true,
   };

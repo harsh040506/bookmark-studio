@@ -8,47 +8,17 @@
  * on each hop of a redirect chain.
  */
 import dns from "node:dns/promises";
-import net from "node:net";
+import { bareHost, ipFamily, isLocalHostname, isPrivateAddress } from "../shared/ip";
 import { createBreaker } from "./breaker";
+import { pinnedRequest, PrivateAddressError } from "./pinned-fetch";
 
 export const USER_AGENT =
-  "Mozilla/5.0 (compatible; SmartBookmarkStudio/2.0; +local bookmark manager)";
+  "Mozilla/5.0 (compatible; BookmarkStudio/5; +https://github.com/harsh040506/bookmark-studio)";
 
 export const MAX_REDIRECTS = 5;
 export const DEFAULT_TIMEOUT_MS = 10_000;
 
-function isPrivateIPv4(address: string): boolean {
-  const parts = address.split(".").map(Number);
-  if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part))) return true;
-  const [a, b] = parts;
-  if (a === 10) return true;
-  if (a === 127) return true;
-  if (a === 0) return true;
-  if (a === 172 && b >= 16 && b <= 31) return true;
-  if (a === 192 && b === 168) return true;
-  if (a === 169 && b === 254) return true; // link-local, incl. cloud metadata
-  if (a === 100 && b >= 64 && b <= 127) return true; // carrier-grade NAT
-  if (a >= 224) return true; // multicast / reserved
-  return false;
-}
-
-function isPrivateIPv6(address: string): boolean {
-  const value = address.toLowerCase().replace(/^\[|\]$/g, "");
-  if (value === "::1" || value === "::") return true;
-  if (value.startsWith("fe80")) return true; // link-local
-  if (/^f[cd]/.test(value)) return true; // unique local
-  // IPv4-mapped addresses (::ffff:10.0.0.1)
-  const mapped = value.match(/::ffff:(\d+\.\d+\.\d+\.\d+)$/);
-  if (mapped) return isPrivateIPv4(mapped[1]);
-  return false;
-}
-
-export function isPrivateAddress(address: string): boolean {
-  const version = net.isIP(address);
-  if (version === 4) return isPrivateIPv4(address);
-  if (version === 6) return isPrivateIPv6(address);
-  return true;
-}
+export { isPrivateAddress };
 
 export class BlockedUrlError extends Error {}
 
@@ -64,17 +34,23 @@ export async function assertPublicUrl(rawUrl: string): Promise<URL> {
   if (url.protocol !== "http:" && url.protocol !== "https:") {
     throw new BlockedUrlError(`Unsupported protocol: ${url.protocol}`);
   }
+  if (url.username || url.password) throw new BlockedUrlError("Addresses with a password are not fetched");
 
-  const hostname = url.hostname.replace(/^\[|\]$/g, "");
-  if (net.isIP(hostname)) {
+  const hostname = bareHost(url.hostname);
+  if (ipFamily(hostname)) {
     if (isPrivateAddress(hostname)) throw new BlockedUrlError("Private address blocked");
     return url;
   }
 
-  if (/^(localhost|.*\.local|.*\.internal|.*\.localhost)$/i.test(hostname)) {
+  if (!hostname || isLocalHostname(hostname)) {
     throw new BlockedUrlError("Local hostname blocked");
   }
 
+  /*
+    Checked here to fail early with a clear reason. It is not what keeps the request safe:
+    a second lookup could answer differently, so the connection itself goes through
+    `publicOnlyLookup` (see pinned-fetch.ts), which re-checks the address actually dialled.
+  */
   let records: { address: string }[];
   try {
     records = await dns.lookup(hostname, { all: true });
@@ -122,9 +98,8 @@ export async function followedFetch(
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     let response: Response;
     try {
-      response = await fetch(url, {
-        ...requestInit,
-        redirect: "manual",
+      response = await pinnedRequest(url, {
+        method: requestInit.method,
         signal: controller.signal,
         headers: {
           "user-agent": USER_AGENT,
@@ -136,6 +111,8 @@ export async function followedFetch(
       // Any HTTP answer, even a 404 or 500, means the site is reachable.
       hostBreaker.success(host);
     } catch (error) {
+      // A rebinding answer is a refusal, not an outage: it must not count against the site.
+      if (error instanceof PrivateAddressError) throw new BlockedUrlError(error.message);
       // A timeout, refused connection or failed lookup: the site did not answer at all.
       hostBreaker.failure(host);
       throw error;
@@ -147,8 +124,7 @@ export async function followedFetch(
     if (response.status >= 300 && response.status < 400 && location) {
       redirectCount += 1;
       current = new URL(location, url).toString();
-      // Drain the body so the socket can be reused.
-      await response.arrayBuffer().catch(() => undefined);
+      await drain(response);
       continue;
     }
 

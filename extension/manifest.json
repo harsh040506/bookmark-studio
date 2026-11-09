@@ -24,13 +24,24 @@
   "content_scripts": [
     {
       "matches": [],
-      "js": ["bridge.js"],
+      "js": [
+        "bridge.js"
+      ],
       "run_at": "document_start",
       "all_frames": false
     }
   ],
-  "permissions": ["bookmarks", "tabs", "scripting", "storage", "unlimitedStorage"],
-  "host_permissions": ["<all_urls>"],
+  "permissions": [
+    "bookmarks",
+    "tabs",
+    "scripting",
+    "storage",
+    "unlimitedStorage"
+  ],
+  "host_permissions": [],
   "minimum_chrome_version": "116",
-  "homepage_url": "https://github.com/harsh040506/bookmark-studio"
+  "homepage_url": "https://github.com/harsh040506/bookmark-studio",
+  "optional_host_permissions": [
+    "<all_urls>"
+  ]
 }

@@ -11,7 +11,7 @@ npm install
 npm run dev        # the app and the local API at http://localhost:5173
 ```
 
-You need Node.js 22.12 or newer. Chrome or Edge is optional; it is only used for screenshot previews and the smoke test.
+You need Node.js 22.12 or newer. Chrome or Edge is optional; it is only used for screenshot previews and the smoke test. To try the Firefox build, run `npm run build:extension` and load `dist/extension-firefox` from `about:debugging`.
 
 ## Before you open a pull request
 
@@ -32,7 +32,8 @@ All five should pass. CI runs all but the smoke test on every pull request. Codi
 - **One codebase, three runtimes.** Anything that needs the network goes through `src/lib/api.ts`, which picks the backend (see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)). Never call `fetch` on another origin directly from a component.
 - **The design system is the only design system.** Use the tokens in `src/styles/tokens.css` and the components in `src/styles/ui.css` and `src/components/ui/`. Don't hard-code colours, add new fonts, or mix in another icon set. Compose new surfaces from the existing tokens, as described in [docs/DESIGN.md](docs/DESIGN.md). Icons come from Hugeicons through `src/components/icons.tsx`.
 - **Scale matters.** Nothing in `App.tsx` may `map`, `filter` or `sort` the whole library. Ask the selection engine (`src/lib/engine.ts`) for a subset.
-- **Undo covers destructive actions.** Mutations go through `commit` in `src/hooks/useLibrary.ts`.
+- **Undo covers destructive actions.** Mutations go through `commit` in `src/hooks/library/core.ts`, which also marks them as the person's change for the shared library.
+- **Storage goes through `src/lib/db.ts`.** It stamps every write and records every delete, which is how the website and the extension keep one library. Don't write to IndexedDB around it.
 - **Comments explain why.** The codebase documents its decisions in place; keep doing that.
 
 ## Reporting bugs

@@ -44,7 +44,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import type { Bookmark, FormatFacet, SortMode, ViewMode } from "../shared/types";
-import { hasPage } from "../shared/types";
+import { hasPage, wantsBrowserSync } from "../shared/types";
 import { AppSidebar } from "./components/app/app-sidebar";
 import { ConnectionStatus } from "./components/app/connection-status";
 import { ImportDialog } from "./components/app/import-dialog";
@@ -87,7 +87,7 @@ import { MATCH_STRENGTH } from "./lib/visual";
 import { SOURCE_BY_ID, detectInput, detectSources } from "./lib/import";
 import { sampleBookmarksFile } from "./lib/sample";
 import { canonicalUrl } from "./lib/text";
-import { pastedLink } from "./lib/url-input";
+import { pastedLink, sharedLink } from "./lib/url-input";
 import { buildSharePage } from "./lib/share";
 import { pictureFor } from "./components/app/media";
 import { downloadFile } from "./lib/utils";
@@ -652,6 +652,27 @@ export default function App() {
    * picture or video is saved directly. Text fields keep their normal paste.
    */
   const [pastedUrl, setPastedUrl] = useState<string | undefined>(undefined);
+
+  /*
+    A link shared from a phone's share sheet into the installed app arrives in the query
+    string. It opens the add dialog with the link filled in, then the query is cleared so a
+    reload does not offer to add it again.
+  */
+  useEffect(() => {
+    if (typeof location === "undefined" || !location.search.includes("share_")) return;
+    const link = sharedLink(location.search);
+    try {
+      history.replaceState(history.state, "", location.pathname + location.hash);
+    } catch {
+      // Some embedded browsers refuse; the dialog still opens.
+    }
+    if (!link) {
+      toast("That share did not include a web link");
+      return;
+    }
+    setPastedUrl(link);
+    setShowAdd(true);
+  }, []);
   useEffect(() => {
     const onPaste = (event: ClipboardEvent) => {
       const target = event.target as HTMLElement | null;
@@ -936,7 +957,7 @@ export default function App() {
       return (
         <Welcome
           runtime={runtime}
-          browserSync={settings.browserSync}
+          browserSync={wantsBrowserSync(settings)}
           loadingSample={loadingSample}
           onImport={() => openImport(null)}
           onSample={() => void loadSample()}
@@ -1016,7 +1037,7 @@ export default function App() {
         }
       />
     );
-  }, [facets.total, search, parsed.chips.length, inTrash, route, settings.lookalikeStrength, settings.browserSync, runtime, loadingSample, openImport, loadSample, library]);
+  }, [facets.total, search, parsed.chips.length, inTrash, route, settings.lookalikeStrength, settings.browserSync, settings.browserSyncChosen, runtime, loadingSample, openImport, loadSample, library]);
 
   /* ----------------------------------------------------------------- render */
 

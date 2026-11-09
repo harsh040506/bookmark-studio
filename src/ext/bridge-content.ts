@@ -51,9 +51,11 @@ declare global {
   const announce = () => {
     if (!alive()) return;
     try {
-      chrome.runtime.sendMessage({ type: "bridge-status" }, (status?: { served: boolean; approved: boolean }) => {
-        if (chrome.runtime.lastError || !status?.served) return;
-        post({ hello: { protocol: PROTOCOL, version, approved: status.approved } });
+      chrome.runtime.sendMessage({ type: "bridge-status" }, (status?: { served: boolean; approved: boolean; pageAccess?: boolean }) => {
+        // Read even when unused, so a closed channel is not reported as unchecked.
+        const failed = chrome.runtime.lastError;
+        if (failed || !status?.served) return;
+        post({ hello: { protocol: PROTOCOL, version, approved: status.approved, pageAccess: status.pageAccess } });
       });
     } catch {
       // The extension was reloaded underneath this page.
@@ -80,16 +82,50 @@ declare global {
       return;
     }
     port.onMessage.addListener((message: { name: string; args: unknown[] }) => {
-      post({ event: { name: `bookmarks.${message.name}`, args: message.args } });
+      // The library event is the extension's own; the rest are `chrome.bookmarks` events.
+      const name = message.name === "libraryChanged" ? message.name : `bookmarks.${message.name}`;
+      post({ event: { name, args: message.args } });
     });
     port.onDisconnect.addListener(() => {
+      // Reading lastError marks it handled. Chrome sets it when the page goes into the
+      // back/forward cache, and an unread one is logged as "Unchecked runtime.lastError".
+      void chrome.runtime.lastError;
       port = null;
+      // A page in the back/forward cache reconnects from `pageshow` when it comes back.
+      if (frozen) return;
       // The service worker restarted (or the extension was updated). Reconnect, and have the
       // page reconcile, since events may have been missed while nobody was listening.
       if (wantEvents) setTimeout(() => connect(true), 250);
     });
-    if (resumed) post({ event: { name: "bookmarks.onImportEnded", args: [] } });
+    if (resumed) {
+      post({ event: { name: "bookmarks.onImportEnded", args: [] } });
+      post({ event: { name: "libraryChanged", args: [] } });
+    }
   };
+
+  /*
+    The back/forward cache. Chrome closes extension ports when a page is stored there, so
+    the port is let go cleanly on the way in, and on the way back the page reconnects and
+    reconciles, because bookmark changes made while it was cached were never delivered.
+  */
+  let frozen = false;
+  window.addEventListener("pagehide", (event) => {
+    if (!event.persisted) return;
+    frozen = true;
+    const current = port;
+    port = null;
+    try {
+      current?.disconnect();
+    } catch {
+      // Already closed.
+    }
+  });
+  window.addEventListener("pageshow", (event) => {
+    if (!event.persisted) return;
+    frozen = false;
+    announce();
+    if (wantEvents && !port) connect(true);
+  });
 
   window.addEventListener("message", (event: MessageEvent<PageMessage>) => {
     if (event.source !== window || event.origin !== origin) return;
@@ -136,7 +172,7 @@ declare global {
   // Approving (or revoking) this site in the extension's window takes effect without a reload.
   try {
     chrome.storage.onChanged.addListener((changes, area) => {
-      if (area === "local" && changes.approvedOrigins) announce();
+      if (area === "local" && (changes.approvedOrigins || changes.pageAccessChangedAt)) announce();
     });
   } catch {
     // storage events unavailable: the page picks the change up on its next load

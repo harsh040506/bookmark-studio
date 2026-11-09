@@ -61,7 +61,8 @@ function workers(recorder: Recorder, options: { captureOk?: boolean } = {}) {
   return {
     // Returns the URLs that produced a screenshot — an empty array is "none of them",
     // which is what drives the retry-then-abandon path below.
-    capture: async (urls: string[]) => {
+    capture: async (rows: Bookmark[]) => {
+      const urls = rows.map((row) => row.url);
       recorder.captured.push(urls);
       return (options.captureOk ?? true) ? urls : [];
     },
@@ -412,7 +413,8 @@ describe("the viewport a screenshot was taken at", () => {
     const seen: string[] = [];
     pipeline.setPipelineSettings({ shots: true, meta: false, health: false, device: "tablet" });
     pipeline.configurePipeline({
-      capture: async (urls, device) => {
+      capture: async (rows, device) => {
+        const urls = rows.map((row) => row.url);
         seen.push(device);
         return urls;
       },

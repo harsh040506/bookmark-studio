@@ -7,7 +7,7 @@
 import { Chrome, Import, Plug, Server, Spinner } from "@/components/icons";
 import { Hint } from "@/components/ui/tooltip";
 import { requestBridgeAccess } from "@/lib/bridge";
-import type { RuntimeState } from "@/lib/runtime";
+import { needsPageAccess, requestPageAccess, type RuntimeState } from "@/lib/runtime";
 import { cn } from "@/lib/utils";
 
 export function ConnectionStatus({
@@ -28,6 +28,11 @@ export function ConnectionStatus({
       <button type="button" className="btn btn-ghost btn-sm w-full justify-start" onClick={onImport}>
         <Import /> Import bookmarks…
       </button>
+      {needsPageAccess(runtime) ? (
+        <button type="button" className="btn btn-primary btn-sm w-full justify-start" onClick={() => void requestPageAccess()}>
+          <Plug /> Allow reading pages…
+        </button>
+      ) : null}
       {runtime.extensionNeedsApproval ? (
         <button type="button" className="btn btn-primary btn-sm w-full justify-start" onClick={() => void requestBridgeAccess().catch(() => undefined)}>
           <Plug /> Allow this site in the extension…
@@ -50,6 +55,7 @@ export function ConnectionStatus({
 }
 
 function describe(runtime: RuntimeState): { label: string; icon: React.ReactNode; tone: "on" | "off" } {
+  if (needsPageAccess(runtime)) return { label: "Waiting for permission to read pages", icon: <Plug size={14} />, tone: "off" };
   switch (runtime.net) {
     case "extension":
       return { label: "Synced with Chrome", icon: <Chrome size={14} />, tone: "on" };

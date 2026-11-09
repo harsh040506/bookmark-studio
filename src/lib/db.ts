@@ -41,6 +41,22 @@ import {
   type Source,
 } from "../../shared/types";
 import { log } from "./log";
+import {
+  SCAN_OVERLAP_MS,
+  SHELL_STORES,
+  decideRecord,
+  decideRow,
+  decideTombstone,
+  isReplicable,
+  mergeSameAddress,
+  type ChangeBatch,
+  type ReplicaCursor,
+  type ShellRecord,
+  type ShellStore,
+  type Stamp,
+  type StampedRecord,
+  type Tombstone,
+} from "./replica";
 import { repairBookmark, repairFolders, repairSettings, type RepairReport } from "./repair";
 
 const DB_NAME = "smart-bookmark-studio";
@@ -55,7 +71,7 @@ const DB_NAME = "smart-bookmark-studio";
  * store is created behind a `contains` check and deleted behind the same one, so an upgrade
  * from v1 and a fresh install take the identical path and no version needs its own branch.
  */
-const DB_VERSION = 7;
+const DB_VERSION = 8;
 
 /** Stores that existed once and no longer do. Dropped on upgrade, never recreated. */
 const RETIRED_STORES = ["canvasNotes", "canvasEdges", "clips", "sessions"] as const;
@@ -96,6 +112,11 @@ export const STORES = {
    * answer to a question asked afresh each time it is opened.
    */
   smart: "smart",
+  /**
+   * Records of deletions, so the other copy of the library (website or extension, see
+   * `replica.ts`) removes the row too instead of sending it back. Added in v8.
+   */
+  tombstones: "tombstones",
 } as const;
 
 type StoreName = (typeof STORES)[keyof typeof STORES];
@@ -124,7 +145,69 @@ interface StoredBookmark extends Bookmark {
   idxState: RowState;
   /** `importedAt ?? addedAt`, so arrival ordering is never a missing key. */
   idxArrived: number;
+  /** When this row was last written, for swapping changes with the other copy (v8). */
+  syncAt?: number;
+  /** Which copy of the library wrote it. */
+  syncBy?: string;
 }
+
+/** A small-store record as written, with the same write stamp. */
+type StoredRecord<T> = T & { syncAt?: number; syncBy?: string };
+
+/* -------------------------------------------------------- write stamps (v8) */
+
+const REPLICA_KEY = "replicaId";
+let replicaPromise: Promise<string> | null = null;
+
+/**
+ * This database's id among the copies of the library.
+ *
+ * Created inside one read-write transaction, so the extension's page and its service
+ * worker, opening the same database at the same moment, cannot each invent a different
+ * one: rows stamped with an id the database no longer claims would never be sent.
+ */
+export function localReplica(): Promise<string> {
+  replicaPromise ??= (async () => {
+    let id: string | undefined;
+    await transact(STORES.meta, "readwrite", ([store]) => {
+      const request = store.get(REPLICA_KEY);
+      request.onsuccess = () => {
+        if (typeof request.result === "string" && request.result) {
+          id = request.result;
+          return;
+        }
+        id = `r_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`;
+        store.put(id, REPLICA_KEY);
+      };
+    });
+    if (!id) throw new Error("No replica id");
+    return id;
+  })().catch((error: unknown) => {
+    replicaPromise = null;
+    throw error;
+  });
+  return replicaPromise;
+}
+
+let lastStampAt = 0;
+/** A stamp for a write happening now. Strictly increasing, so two quick writes never tie. */
+async function freshStamp(): Promise<Stamp> {
+  const by = await localReplica();
+  lastStampAt = Math.max(Date.now(), lastStampAt + 1);
+  return { at: lastStampAt, by };
+}
+
+function stampRecord<T extends object>(record: T, stamp: Stamp): StoredRecord<T> {
+  return { ...record, syncAt: stamp.at, syncBy: stamp.by };
+}
+
+function unstampRecord<T>(record: T): T {
+  if (!record || typeof record !== "object") return record;
+  const { syncAt: _at, syncBy: _by, ...rest } = record as StoredRecord<Record<string, unknown>>;
+  return rest as T;
+}
+
+const tombstoneKey = (store: string, id: string) => `${store}:${id}`;
 
 export function rowState(bookmark: Bookmark): RowState {
   if (bookmark.trashedAt) return "trash";
@@ -132,11 +215,13 @@ export function rowState(bookmark: Bookmark): RowState {
   return "live";
 }
 
-function stampState(bookmark: Bookmark): StoredBookmark {
+function stampState(bookmark: Bookmark, stamp: Stamp): StoredBookmark {
   return {
     ...bookmark,
     idxState: rowState(bookmark),
     idxArrived: bookmark.importedAt ?? bookmark.addedAt,
+    syncAt: stamp.at,
+    syncBy: stamp.by,
   };
 }
 
@@ -156,7 +241,7 @@ function unstamp(row: StoredBookmark | Bookmark, report?: RepairReport): Bookmar
     if (report) report.dropped += 1;
     return null;
   }
-  const { idxState: _state, idxArrived: _arrived, ...bookmark } = row as StoredBookmark;
+  const { idxState: _state, idxArrived: _arrived, syncAt: _syncAt, syncBy: _syncBy, ...bookmark } = row as StoredBookmark;
   return repairBookmark(bookmark, report);
 }
 
@@ -281,6 +366,12 @@ function openDatabase(): Promise<IDBDatabase> {
         db.createObjectStore(STORES.smart, { keyPath: "id" });
       }
 
+      // Added in v8, for sharing one library between the website and the extension.
+      if (!db.objectStoreNames.contains(STORES.tombstones)) {
+        const store = db.createObjectStore(STORES.tombstones, { keyPath: "key" });
+        store.createIndex("sync", ["at", "key"], { unique: false });
+      }
+
       // Removed in v7, along with the features that wrote to them.
       for (const retired of RETIRED_STORES) {
         if (db.objectStoreNames.contains(retired)) db.deleteObjectStore(retired);
@@ -312,6 +403,9 @@ function openDatabase(): Promise<IDBDatabase> {
         // will ever ask for, so its absence from the index costs nothing.
         ensure("importId", "importId");
         ensure("sourceId", "sourceId");
+        // "What changed since we last spoke", for the other copy of the library. Rows
+        // written before v8 have no stamp and are read by a full scan the first time.
+        ensure("sync", ["syncAt", "id"]);
       }
       if (transaction && db.objectStoreNames.contains(STORES.activity)) {
         const store = transaction.objectStore(STORES.activity);
@@ -554,6 +648,26 @@ export function isReported(error: unknown): boolean {
   return Boolean(error && typeof error === "object" && (error as { bsReported?: boolean }).bsReported);
 }
 
+/**
+ * Told after a library write lands. The extension's page uses it to wake a connected
+ * website so it collects the change (see `replication.ts`). `fromReplica` marks writes that
+ * were themselves copied in from the other side, which need not be sent back.
+ */
+type WriteListener = (fromReplica: boolean) => void;
+const writeListeners = new Set<WriteListener>();
+const LIBRARY_STORES = new Set<string>([STORES.bookmarks, STORES.tombstones, ...SHELL_STORES]);
+let applyingReplica = false;
+
+export function onLibraryWrite(listener: WriteListener): () => void {
+  writeListeners.add(listener);
+  return () => writeListeners.delete(listener);
+}
+
+function noteLibraryWrite(store: string): void {
+  if (!LIBRARY_STORES.has(store)) return;
+  for (const listener of writeListeners) listener(applyingReplica);
+}
+
 const recordId = (store: StoreName, key: IDBValidKey) => `${store}\u0000${String(key)}`;
 
 /**
@@ -584,6 +698,7 @@ async function writeKeyed(store: StoreName, entries: { key: IDBValidKey; value: 
         latestSeq.delete(entry.id);
       }
     }
+    noteLibraryWrite(store);
   } catch (error) {
     lastFailure = classifyWriteFailure(error);
     for (const entry of stamped) {
@@ -733,13 +848,15 @@ export async function loadRest(exclude: Set<string>): Promise<Bookmark[]> {
 
 /** Everything except the bookmarks — small stores, read in one go alongside the page. */
 export async function loadShell(): Promise<Omit<Snapshot, "bookmarks">> {
-  const [folders, boards, imports, sources, smart] = await Promise.all([
-    readAll<Folder>(STORES.folders),
-    readAll<Board>(STORES.boards),
-    readAll<ImportBatch>(STORES.imports),
-    readAll<Source>(STORES.sources),
-    readAll<SmartCollection>(STORES.smart),
-  ]);
+  const [folders, boards, imports, sources, smart] = (
+    await Promise.all([
+      readAll<Folder>(STORES.folders),
+      readAll<Board>(STORES.boards),
+      readAll<ImportBatch>(STORES.imports),
+      readAll<Source>(STORES.sources),
+      readAll<SmartCollection>(STORES.smart),
+    ])
+  ).map((rows) => rows.map(unstampRecord)) as [Folder[], Board[], ImportBatch[], Source[], SmartCollection[]];
   const report: RepairReport = { repaired: 0, dropped: 0 };
   const identified = <T>(rows: T[]): T[] =>
     rows.filter((row) => {
@@ -762,6 +879,34 @@ export async function loadShell(): Promise<Omit<Snapshot, "bookmarks">> {
   };
   noteRepairs("shell", report);
   return shell;
+}
+
+/**
+ * Reads specific bookmarks by id, repaired, skipping any that no longer exist.
+ *
+ * For another tab's change notice: re-reading the whole library for every background
+ * write meant thousands of full scans a minute at the scale this app is built for.
+ */
+export async function getBookmarks(ids: string[]): Promise<Bookmark[]> {
+  const unique = [...new Set(ids.filter((id) => typeof id === "string"))];
+  if (!unique.length) return [];
+  const found: unknown[] = [];
+  await transact(STORES.bookmarks, "readonly", ([store]) => {
+    for (const id of unique) {
+      const request = store.get(id);
+      request.onsuccess = () => {
+        if (request.result !== undefined) found.push(request.result);
+      };
+    }
+  });
+  const report: RepairReport = { repaired: 0, dropped: 0 };
+  const rows: Bookmark[] = [];
+  for (const row of found) {
+    const repaired = unstamp(row as StoredBookmark, report);
+    if (repaired) rows.push(repaired);
+  }
+  noteRepairs("changed-rows", report);
+  return rows;
 }
 
 export async function loadSnapshot(): Promise<Snapshot> {
@@ -787,22 +932,43 @@ export async function loadSnapshot(): Promise<Snapshot> {
  * a tab closed inside that window persists the inconsistency.
  */
 export async function replaceAll(snapshot: Snapshot): Promise<void> {
+  const stamp = await freshStamp();
+  const kept: Record<string, Set<string>> = {
+    [STORES.bookmarks]: new Set(snapshot.bookmarks.map((row) => row.id)),
+    [STORES.folders]: new Set(snapshot.folders.map((row) => row.id)),
+    [STORES.boards]: new Set(snapshot.boards.map((row) => row.id)),
+    [STORES.imports]: new Set(snapshot.imports.map((row) => row.id)),
+    [STORES.sources]: new Set(snapshot.sources.map((row) => row.id)),
+    [STORES.smart]: new Set(snapshot.smart.map((row) => row.id)),
+  };
   await transact(
-    [STORES.bookmarks, STORES.folders, STORES.boards, STORES.imports, STORES.sources, STORES.smart],
+    [STORES.bookmarks, STORES.folders, STORES.boards, STORES.imports, STORES.sources, STORES.smart, STORES.tombstones],
     "readwrite",
-    ([bookmarks, folders, boards, imports, sources, smart]) => {
+    ([bookmarks, folders, boards, imports, sources, smart, tombstones]) => {
+      // Rows that disappear in the swap are recorded as deleted, so the other copy of the
+      // library loses them too rather than sending them straight back.
+      for (const store of [bookmarks, folders, boards, imports, sources, smart]) {
+        const keys = store.getAllKeys();
+        keys.onsuccess = () => {
+          for (const key of keys.result) {
+            const id = String(key);
+            if (kept[store.name]?.has(id)) continue;
+            tombstones.put({ key: tombstoneKey(store.name, id), store: store.name, id, at: stamp.at, by: stamp.by });
+          }
+        };
+      }
       bookmarks.clear();
       folders.clear();
       boards.clear();
       imports.clear();
       sources.clear();
       smart.clear();
-      for (const bookmark of snapshot.bookmarks) bookmarks.put(stampState(bookmark));
-      for (const folder of snapshot.folders) folders.put(folder);
-      for (const board of snapshot.boards) boards.put(board);
-      for (const batch of snapshot.imports) imports.put(batch);
-      for (const source of snapshot.sources) sources.put(source);
-      for (const collection of snapshot.smart) smart.put(collection);
+      for (const bookmark of snapshot.bookmarks) bookmarks.put(stampState(bookmark, stamp));
+      for (const folder of snapshot.folders) folders.put(stampRecord(folder, stamp));
+      for (const board of snapshot.boards) boards.put(stampRecord(board, stamp));
+      for (const batch of snapshot.imports) imports.put(stampRecord(batch, stamp));
+      for (const source of snapshot.sources) sources.put(stampRecord(source, stamp));
+      for (const collection of snapshot.smart) smart.put(stampRecord(collection, stamp));
     },
   );
   const replaced = new Set<StoreName>([
@@ -820,63 +986,359 @@ export async function replaceAll(snapshot: Snapshot): Promise<void> {
     }
   }
   emitHealth();
+  noteLibraryWrite(STORES.bookmarks);
+}
+
+/** Writes small-store records with a fresh stamp. */
+async function putRecords<T extends { id: string }>(store: StoreName, records: T[]): Promise<void> {
+  if (!records.length) return;
+  const stamp = await freshStamp();
+  await writeKeyed(store, records.map((record) => ({ key: record.id, value: stampRecord(record, stamp) })));
+}
+
+/** Deletes records and leaves a tombstone for each, so the deletion reaches the other copy. */
+async function deleteRecords(store: StoreName, ids: string[]): Promise<void> {
+  if (!ids.length) return;
+  const stamp = await freshStamp();
+  await writeKeyed(
+    STORES.tombstones,
+    ids.map((id) => ({ key: tombstoneKey(store, id), value: { key: tombstoneKey(store, id), store, id, at: stamp.at, by: stamp.by } })),
+  );
+  await writeKeyed(store, ids.map((id) => ({ key: id, value: DELETE })));
 }
 
 export async function putSources(sources: Source[]): Promise<void> {
-  await writeKeyed(STORES.sources, sources.map((source) => ({ key: source.id, value: source })));
+  await putRecords(STORES.sources, sources);
 }
 
 export async function deleteSource(id: string): Promise<void> {
-  await writeKeyed(STORES.sources, [{ key: id, value: DELETE }]);
+  await deleteRecords(STORES.sources, [id]);
 }
 
 /* ---------------------------------------------------- smart collections -- */
 
-export function loadSmartCollections(): Promise<SmartCollection[]> {
-  return readAll<SmartCollection>(STORES.smart);
+export async function loadSmartCollections(): Promise<SmartCollection[]> {
+  return (await readAll<SmartCollection>(STORES.smart)).map(unstampRecord);
 }
 
 export async function putSmartCollections(collections: SmartCollection[]): Promise<void> {
-  await writeKeyed(STORES.smart, collections.map((collection) => ({ key: collection.id, value: collection })));
+  await putRecords(STORES.smart, collections);
 }
 
 export async function deleteSmartCollection(id: string): Promise<void> {
-  await writeKeyed(STORES.smart, [{ key: id, value: DELETE }]);
+  await deleteRecords(STORES.smart, [id]);
 }
 
 export async function putImports(batches: ImportBatch[]): Promise<void> {
-  await writeKeyed(STORES.imports, batches.map((batch) => ({ key: batch.id, value: batch })));
+  await putRecords(STORES.imports, batches);
 }
 
 export async function deleteImport(id: string): Promise<void> {
-  await writeKeyed(STORES.imports, [{ key: id, value: DELETE }]);
+  await deleteRecords(STORES.imports, [id]);
 }
 
 export async function putBookmarks(bookmarks: Bookmark[]): Promise<void> {
+  if (!bookmarks.length) return;
+  const stamp = await freshStamp();
   await writeKeyed(
     STORES.bookmarks,
-    bookmarks.map((bookmark) => ({ key: bookmark.id, value: stampState(bookmark) })),
+    bookmarks.map((bookmark) => ({ key: bookmark.id, value: stampState(bookmark, stamp) })),
   );
 }
 
 export async function deleteBookmarks(ids: string[]): Promise<void> {
-  await writeKeyed(STORES.bookmarks, ids.map((id) => ({ key: id, value: DELETE })));
+  await deleteRecords(STORES.bookmarks, ids);
 }
 
 export async function putFolders(folders: Folder[]): Promise<void> {
-  await writeKeyed(STORES.folders, folders.map((folder) => ({ key: folder.id, value: folder })));
+  await putRecords(STORES.folders, folders);
 }
 
 export async function deleteFolders(ids: string[]): Promise<void> {
-  await writeKeyed(STORES.folders, ids.map((id) => ({ key: id, value: DELETE })));
+  await deleteRecords(STORES.folders, ids);
 }
 
 export async function putBoards(boards: Board[]): Promise<void> {
-  await writeKeyed(STORES.boards, boards.map((board) => ({ key: board.id, value: board })));
+  await putRecords(STORES.boards, boards);
 }
 
 export async function deleteBoard(id: string): Promise<void> {
-  await writeKeyed(STORES.boards, [{ key: id, value: DELETE }]);
+  await deleteRecords(STORES.boards, [id]);
+}
+
+/* ------------------------------------------- swapping changes with the other copy */
+
+/** Rows and bytes per page. Chrome's extension messages top out at 64 MB; stay far below. */
+const PAGE_ROWS = 400;
+const PAGE_BYTES = 3_000_000;
+
+export interface ChangePage extends ChangeBatch {
+  cursor: ReplicaCursor;
+  /** Nothing more to read right now. */
+  done: boolean;
+}
+
+/**
+ * Reads the next page of this database's changes for the other copy.
+ *
+ * `keep` filters by which copy wrote a record: a reader never sends a record back to the
+ * copy it came from. `fresh` marks the first page of a round, which starts a little before
+ * the saved cursor: a write is stamped before its transaction commits, so a slow commit
+ * can land behind a cursor that has already moved past its stamp. Re-sent records are
+ * recognised and skipped on arrival.
+ */
+export async function readChanges(
+  cursor: ReplicaCursor | null,
+  keep: (by: string) => boolean,
+  fresh: boolean,
+): Promise<ChangePage> {
+  const me = await localReplica();
+  const position: ReplicaCursor = cursor ?? { phase: "scan", after: "", startedAt: Date.now() };
+  const page: ChangePage = { rows: [], tombstones: [], shell: [], cursor: position, done: false };
+  let bytes = 0;
+  const take = (row: StoredBookmark): void => {
+    const stamp: Stamp = { at: row.syncAt ?? 0, by: row.syncBy ?? me };
+    if (!keep(stamp.by)) return;
+    const clean = unstamp(row);
+    if (!clean || !isReplicable(clean)) return;
+    bytes += JSON.stringify(clean).length;
+    page.rows.push({ row: clean, stamp });
+  };
+
+  if (position.phase === "scan") {
+    let last = position.after;
+    let exhausted = false;
+    await transact(STORES.bookmarks, "readonly", ([store]) => {
+      page.rows = [];
+      bytes = 0;
+      last = position.after;
+      exhausted = false;
+      let read = 0;
+      const request = store.openCursor(position.after ? IDBKeyRange.lowerBound(position.after, true) : undefined);
+      request.onsuccess = () => {
+        const at = request.result;
+        if (!at) {
+          exhausted = true;
+          return;
+        }
+        take(at.value as StoredBookmark);
+        last = String(at.primaryKey);
+        read += 1;
+        if (read < PAGE_ROWS && bytes < PAGE_BYTES) at.continue();
+      };
+    });
+    page.cursor = exhausted
+      ? { phase: "index", row: [position.startedAt - SCAN_OVERLAP_MS, ""], tomb: [0, ""], shellAt: -1 }
+      : { phase: "scan", after: last, startedAt: position.startedAt };
+    return page;
+  }
+
+  let rowKey = position.row;
+  let tombKey = position.tomb;
+  let rowsRead = 0;
+  let tombsRead = 0;
+  const shellRead: StampedRecord[] = [];
+  let shellAt = position.shellAt;
+  await transact([STORES.bookmarks, STORES.tombstones, ...SHELL_STORES], "readonly", ([bookmarks, tombstones, ...shell]) => {
+    page.rows = [];
+    page.tombstones = [];
+    shellRead.length = 0;
+    bytes = 0;
+    rowKey = position.row;
+    tombKey = position.tomb;
+    rowsRead = 0;
+    tombsRead = 0;
+    shellAt = position.shellAt;
+    const from = (key: [number, string]) =>
+      fresh ? IDBKeyRange.lowerBound([key[0] - SCAN_OVERLAP_MS, ""]) : IDBKeyRange.lowerBound(key, true);
+
+    const rows = bookmarks.index("sync").openCursor(from(position.row));
+    rows.onsuccess = () => {
+      const at = rows.result;
+      if (!at) return;
+      take(at.value as StoredBookmark);
+      rowKey = at.key as [number, string];
+      rowsRead += 1;
+      if (rowsRead < PAGE_ROWS && bytes < PAGE_BYTES) at.continue();
+    };
+    const tombs = tombstones.index("sync").openCursor(from(position.tomb));
+    tombs.onsuccess = () => {
+      const at = tombs.result;
+      if (!at) return;
+      const value = at.value as Tombstone & { key: string };
+      if (keep(value.by)) page.tombstones.push({ store: value.store, id: value.id, at: value.at, by: value.by });
+      tombKey = at.key as [number, string];
+      tombsRead += 1;
+      if (tombsRead < PAGE_ROWS) at.continue();
+    };
+    // The small stores are read whole once a round, and on the first page after a full
+    // scan: a few hundred records at most.
+    if (!fresh && position.shellAt >= 0) return;
+    shell.forEach((store, index) => {
+      const name = SHELL_STORES[index] as ShellStore;
+      const all = store.getAll();
+      all.onsuccess = () => {
+        for (const value of all.result as StoredRecord<ShellRecord>[]) {
+          const stamp: Stamp = { at: value?.syncAt ?? 0, by: value?.syncBy ?? me };
+          shellAt = Math.max(shellAt, stamp.at, 0);
+          if (stamp.at < position.shellAt - SCAN_OVERLAP_MS || !keep(stamp.by)) continue;
+          if (!value || typeof (value as { id?: unknown }).id !== "string") continue;
+          shellRead.push({ store: name, record: unstampRecord(value), stamp });
+        }
+      };
+    });
+  });
+  page.shell = shellRead;
+  page.cursor = { phase: "index", row: rowKey, tomb: tombKey, shellAt };
+  page.done = rowsRead < PAGE_ROWS && bytes < PAGE_BYTES && tombsRead < PAGE_ROWS;
+  return page;
+}
+
+/** What applying a batch changed, for the open windows to re-read. */
+export interface AppliedChanges {
+  changed: string[];
+  removed: string[];
+  shell: boolean;
+}
+
+/**
+ * This database's own rows by address, for the first time two copies meet.
+ *
+ * Someone who imported the same file on the website and in the extension has the same
+ * bookmarks under different ids. Matching by address on first contact merges them instead
+ * of showing every bookmark twice.
+ */
+export async function localRowsByUrl(): Promise<Map<string, { row: Bookmark; stamp: Stamp }>> {
+  const me = await localReplica();
+  const map = new Map<string, { row: Bookmark; stamp: Stamp }>();
+  for (const stored of await readAll<StoredBookmark>(STORES.bookmarks)) {
+    if (stored?.syncBy && stored.syncBy !== me) continue;
+    const row = unstamp(stored);
+    if (row && isReplicable(row) && !map.has(row.url)) map.set(row.url, { row, stamp: { at: stored.syncAt ?? 0, by: me } });
+  }
+  return map;
+}
+
+/** Writes a batch from the other copy, merging row by row (see `replica.ts`). */
+export async function applyChanges(
+  batch: ChangeBatch,
+  byUrl?: Map<string, { row: Bookmark; stamp: Stamp }>,
+): Promise<AppliedChanges> {
+  const rowIds = new Set<string>([
+    ...batch.rows.map((entry) => entry.row.id),
+    ...batch.tombstones.filter((entry) => entry.store === "bookmarks").map((entry) => entry.id),
+  ]);
+  const local = new Map<string, StoredBookmark>();
+  const localShell = new Map<string, StoredRecord<ShellRecord>>();
+  const tombs = new Map<string, { at: number }>();
+
+  await transact([STORES.bookmarks, STORES.tombstones, ...SHELL_STORES], "readonly", ([bookmarks, tombstones, ...shell]) => {
+    local.clear();
+    localShell.clear();
+    tombs.clear();
+    for (const id of rowIds) {
+      const request = bookmarks.get(id);
+      request.onsuccess = () => {
+        if (request.result) local.set(id, request.result as StoredBookmark);
+      };
+    }
+    const wanted = [
+      ...batch.rows.map((entry) => tombstoneKey(STORES.bookmarks, entry.row.id)),
+      ...batch.shell.map((entry) => tombstoneKey(entry.store, entry.record.id)),
+    ];
+    for (const key of wanted) {
+      const request = tombstones.get(key);
+      request.onsuccess = () => {
+        if (request.result) tombs.set(key, request.result as { at: number });
+      };
+    }
+    const shellIds = [
+      ...batch.shell.map((entry) => [entry.store, entry.record.id] as const),
+      ...batch.tombstones.filter((entry) => entry.store !== "bookmarks").map((entry) => [entry.store as ShellStore, entry.id] as const),
+    ];
+    for (const [name, id] of shellIds) {
+      const request = shell[SHELL_STORES.indexOf(name)]!.get(id);
+      request.onsuccess = () => {
+        if (request.result) localShell.set(tombstoneKey(name, id), request.result as StoredRecord<ShellRecord>);
+      };
+    }
+  });
+
+  const stampOf = (row: StoredBookmark | StoredRecord<ShellRecord>, me: string): Stamp => ({ at: row.syncAt ?? 0, by: row.syncBy ?? me });
+  const me = await localReplica();
+  const rowWrites: { key: IDBValidKey; value: WriteValue }[] = [];
+  const rowDeletes: string[] = [];
+  const changed: string[] = [];
+  let blendStamp: Stamp | null = null;
+
+  for (const incoming of batch.rows) {
+    const id = incoming.row.id;
+    const stored = local.get(id);
+    let current = stored ? { row: unstamp(stored)!, stamp: stampOf(stored, me) } : undefined;
+    let renamedFrom: string | null = null;
+    if (!current && byUrl) {
+      const match = byUrl.get(incoming.row.url);
+      if (match && match.row.id !== id) {
+        current = { row: { ...match.row, id }, stamp: match.stamp };
+        renamedFrom = match.row.id;
+        byUrl.delete(incoming.row.url);
+      }
+    }
+    const decision = renamedFrom
+      ? ({ action: "blend", row: mergeSameAddress(current!, incoming, id) } as const)
+      : decideRow(current, incoming, tombs.get(tombstoneKey(STORES.bookmarks, id)));
+    if (decision.action === "keep" && !renamedFrom) continue;
+    // A merged row is new to both copies, so it goes out under this copy's stamp.
+    const row = decision.action === "keep" ? current!.row : decision.row;
+    const stamp = decision.action === "take" ? incoming.stamp : (blendStamp ??= await freshStamp());
+    rowWrites.push({ key: id, value: stampState(row, stamp) });
+    changed.push(id);
+    if (renamedFrom) rowDeletes.push(renamedFrom);
+  }
+
+  const removed: string[] = [...rowDeletes];
+  const tombWrites: { key: IDBValidKey; value: WriteValue }[] = [];
+  const shellWrites = new Map<ShellStore, { key: IDBValidKey; value: WriteValue }[]>();
+  const shellWrite = (store: ShellStore, entry: { key: IDBValidKey; value: WriteValue }) => {
+    const list = shellWrites.get(store) ?? [];
+    list.push(entry);
+    shellWrites.set(store, list);
+  };
+
+  for (const tombstone of batch.tombstones) {
+    const key = tombstoneKey(tombstone.store, tombstone.id);
+    tombWrites.push({ key, value: { key, ...tombstone } });
+    if (tombstone.store === "bookmarks") {
+      const stored = local.get(tombstone.id);
+      if (decideTombstone(stored ? { stamp: stampOf(stored, me) } : undefined, tombstone)) {
+        rowWrites.push({ key: tombstone.id, value: DELETE });
+        removed.push(tombstone.id);
+      }
+    } else {
+      const stored = localShell.get(key);
+      if (decideTombstone(stored ? { stamp: stampOf(stored, me) } : undefined, tombstone)) {
+        shellWrite(tombstone.store, { key: tombstone.id, value: DELETE });
+      }
+    }
+  }
+  for (const incoming of batch.shell) {
+    const key = tombstoneKey(incoming.store, incoming.record.id);
+    const stored = localShell.get(key);
+    if (decideRecord(stored ? { stamp: stampOf(stored, me) } : undefined, incoming, tombs.get(key))) {
+      shellWrite(incoming.store, { key: incoming.record.id, value: stampRecord(incoming.record, incoming.stamp) });
+    }
+  }
+
+  applyingReplica = true;
+  try {
+    if (tombWrites.length) await writeKeyed(STORES.tombstones, tombWrites);
+    if (rowDeletes.length) rowWrites.push(...rowDeletes.map((id) => ({ key: id, value: DELETE })));
+    if (rowWrites.length) await writeKeyed(STORES.bookmarks, rowWrites);
+    for (const [store, entries] of shellWrites) await writeKeyed(store, entries);
+  } finally {
+    applyingReplica = false;
+  }
+  return { changed, removed, shell: shellWrites.size > 0 };
 }
 
 export async function clearLibrary(): Promise<void> {

@@ -47,3 +47,29 @@ export function pastedLink(text: string): string | null {
   const check = normalizeUserUrl(value);
   return check.ok ? check.url : null;
 }
+
+/**
+ * The link shared into the installed app from a phone's share sheet, if any.
+ *
+ * Android apps disagree about where the link goes: some fill the URL field, many put it
+ * inside the text ("Look at this https://…"), a few send only a title. The first web
+ * address found is used, and only http(s), the same allow-list as typing one in.
+ */
+export function sharedLink(search: string): string | null {
+  let params: URLSearchParams;
+  try {
+    params = new URLSearchParams(search);
+  } catch {
+    return null;
+  }
+  const candidates = [params.get("share_url"), params.get("share_text"), params.get("share_title")];
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    const match = candidate.slice(0, 4096).match(/https?:\/\/[^\s<>"']+/i);
+    if (!match) continue;
+    const cleaned = match[0].replace(/[).,;!?]+$/, "");
+    const result = normalizeUserUrl(cleaned);
+    if (result.ok) return result.url;
+  }
+  return null;
+}

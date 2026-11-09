@@ -1,4 +1,4 @@
-# Publishes a GitHub Release with the extension attached when a version tag (v*) is pushed.
+# Publishes a GitHub Release with both extension builds attached when a version tag (v*) is pushed.
 # The extension is built for the website set in the repository variable SITE_URL.
 name: Release
 
@@ -32,6 +32,6 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" dist/bookmark-studio-extension.zip \
+          gh release create "$GITHUB_REF_NAME" dist/bookmark-studio-extension.zip dist/bookmark-studio-extension-firefox.zip \
             --title "Bookmark Studio $GITHUB_REF_NAME" \
             --generate-notes

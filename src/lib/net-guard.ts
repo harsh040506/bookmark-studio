@@ -16,43 +16,12 @@
  * `ReadableStream` reader works identically in a page, a worker and a service worker.
  */
 
+import { bareHost, ipFamily, isLocalHostname, isPrivateAddress } from "../../shared/ip";
+
 export class BlockedUrlError extends Error {}
 export class ResponseTooLargeError extends Error {}
 
-function isPrivateIPv4(address: string): boolean {
-  const parts = address.split(".").map(Number);
-  if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part))) return true;
-  const [a, b] = parts;
-  if (a === 10) return true;
-  if (a === 127) return true;
-  if (a === 0) return true;
-  if (a === 172 && b >= 16 && b <= 31) return true;
-  if (a === 192 && b === 168) return true;
-  if (a === 169 && b === 254) return true; // link-local, incl. cloud metadata
-  if (a === 100 && b >= 64 && b <= 127) return true; // carrier-grade NAT
-  if (a >= 224) return true; // multicast / reserved
-  return false;
-}
-
-function isPrivateIPv6(address: string): boolean {
-  const value = address.toLowerCase().replace(/^\[|\]$/g, "");
-  if (value === "::1" || value === "::") return true;
-  if (value.startsWith("fe80")) return true;
-  if (/^f[cd]/.test(value)) return true;
-  const mapped = value.match(/::ffff:(\d+\.\d+\.\d+\.\d+)$/);
-  if (mapped) return isPrivateIPv4(mapped[1]);
-  return false;
-}
-
-const IPV4_RE = /^\d{1,3}(\.\d{1,3}){3}$/;
-
-function looksLikeIp(hostname: string): "v4" | "v6" | null {
-  if (IPV4_RE.test(hostname)) return "v4";
-  if (hostname.includes(":")) return "v6";
-  return null;
-}
-
-/** Rejects obviously-private or non-http(s) targets. A courtesy check, not a sandbox. */
+/** Rejects private, local or non-http(s) targets. A courtesy check, not a sandbox. */
 export function assertPlausiblyPublic(rawUrl: string): URL {
   let url: URL;
   try {
@@ -63,11 +32,11 @@ export function assertPlausiblyPublic(rawUrl: string): URL {
   if (url.protocol !== "http:" && url.protocol !== "https:") {
     throw new BlockedUrlError(`Unsupported protocol: ${url.protocol}`);
   }
-  const hostname = url.hostname.replace(/^\[|\]$/g, "");
-  const kind = looksLikeIp(hostname);
-  if (kind === "v4" && isPrivateIPv4(hostname)) throw new BlockedUrlError("Private address blocked");
-  if (kind === "v6" && isPrivateIPv6(hostname)) throw new BlockedUrlError("Private address blocked");
-  if (!kind && /^(localhost|.*\.local|.*\.internal|.*\.localhost)$/i.test(hostname)) {
+  // Credentials in a URL would be sent to the site; a bookmark never needs them.
+  if (url.username || url.password) throw new BlockedUrlError("Addresses with a password are not fetched");
+  if (ipFamily(url.hostname)) {
+    if (isPrivateAddress(url.hostname)) throw new BlockedUrlError("Private address blocked");
+  } else if (!bareHost(url.hostname) || isLocalHostname(url.hostname)) {
     throw new BlockedUrlError("Local hostname blocked");
   }
   return url;
@@ -131,9 +100,28 @@ export async function guardedFetch(
       signal: controller.signal,
       headers: { ...USER_AGENT_ACCEPT, ...(requestInit.headers as Record<string, string> | undefined) },
     });
-    return { response, finalUrl: response.url || url.toString(), redirected: response.redirected };
+    const finalUrl = response.url || url.toString();
+    await refuseRedirectInto(finalUrl, response);
+    return { response, finalUrl, redirected: response.redirected };
   } finally {
     clearTimeout(timer);
+  }
+}
+
+/**
+ * Refuses a response whose redirects ended somewhere private.
+ *
+ * A browser follows redirects without showing the hops, so the request to the final
+ * address has already been made by the time this runs. What it prevents is that page's
+ * content being read back into the library: a bookmark that bounces to a router's admin
+ * page must not have that page's text indexed or archived.
+ */
+export async function refuseRedirectInto(finalUrl: string, response: Response): Promise<void> {
+  try {
+    assertPlausiblyPublic(finalUrl);
+  } catch (error) {
+    await drain(response);
+    throw error;
   }
 }
 
