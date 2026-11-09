@@ -57,6 +57,32 @@ So the bookmarks bar turns into a junk drawer, and you stop trusting it. Bookmar
 </tr>
 </table>
 
+## A real library
+
+The same app with an everyday collection: two dozen AI startups saved while reading the news, and a few personal projects. Every preview was captured automatically after a single import.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/media/showcase-startups-dark.webp">
+  <img src="docs/media/showcase-startups-light.webp" alt="A folder of 24 AI startup bookmarks shown as a grid of page previews: Wishlabs, Almanac, Frontrunner, Etched, Abridge, Daylight, Cofounder, Poly, Littlebird and more.">
+</picture>
+
+<table>
+<tr>
+<td width="50%"><img src="docs/media/showcase-project-detail.webp" alt="The detail panel for Solid State, a free course in solid state chemistry: a large preview, the page's own description and its tags."></td>
+<td width="50%"><img src="docs/media/showcase-list-light.webp" alt="The same AI startups folder as a compact list, with each page's description, folder and the date it was saved. Pages that now redirect are marked Moved."></td>
+</tr>
+<tr>
+<td><sub><b>Your own projects, described by their own pages.</b> The description and tags came from the site itself.</sub></td>
+<td><sub><b>The list view</b> fits more on screen, with each page's own summary. "Moved" marks sites that now redirect elsewhere.</sub></td>
+</tr>
+<tr>
+<td colspan="2"><img src="docs/media/showcase-search-light.webp" alt="Searching for 'memory' across the library finds Supermemory and HydraDB."></td>
+</tr>
+<tr>
+<td colspan="2"><sub><b>Search across everything:</b> "memory" finds the memory-infrastructure startups among all 28 links.</sub></td>
+</tr>
+</table>
+
 ## Start in a minute
 
 1. **Export your bookmarks.** In Chrome, open the bookmark manager (`Ctrl Shift O`), click **⋮**, then **Export bookmarks**. Every browser has the same option.

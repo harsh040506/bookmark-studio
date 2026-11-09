@@ -7,6 +7,7 @@
 // waits for every preview to be captured, then writes:
 //
 //   docs/media/*.webp       README screenshots, at twice the viewport's resolution
+//   docs/media/showcase-*   the same from a real-world library (scripts/media/showcase.html)
 //   docs/media/demo.gif     the README's walk-through
 //   public/media/*          the about page's screenshot (WebP, with a PNG fallback)
 //   public/og/*.png         1200×630 link previews, one per page (site/content.mjs names them)
@@ -208,6 +209,9 @@ async function main() {
     args: ["--hide-scrollbars", "--force-color-profile=srgb", "--lang=en-GB"],
   });
   try {
+    // MEDIA_ONLY=showcase or MEDIA_ONLY=sample re-shoots just one set.
+    if (process.env.MEDIA_ONLY !== "sample") await showcase(executablePath);
+    if (process.env.MEDIA_ONLY === "showcase") return;
     const desktop = { width: 1440, height: 900, deviceScaleFactor: 2 };
 
     // The first-run screen, in a throwaway context so it is always empty.
@@ -326,6 +330,77 @@ async function main() {
   } finally {
     await browser.close();
     server.kill();
+  }
+}
+
+/**
+ * A second set of pictures from a real-world library (scripts/media/showcase.html): AI
+ * startups and a handful of personal projects, imported through the import dialog the way
+ * anyone would. Kept in its own profile so the sample library's pictures are unaffected.
+ */
+async function showcase(executablePath) {
+  const browser = await puppeteer.launch({
+    executablePath,
+    headless: true,
+    userDataDir: path.join(ROOT, ".cache", "media-showcase-profile"),
+    args: ["--hide-scrollbars", "--force-color-profile=srgb", "--lang=en-GB"],
+  });
+  try {
+    const page = await browser.newPage();
+    await page.setViewport({ width: 1440, height: 900, deviceScaleFactor: 2 });
+    await page.emulateMediaFeatures([{ name: "prefers-color-scheme", value: "light" }]);
+    await page.goto(APP, { waitUntil: "networkidle0" });
+    await page.evaluate(async () => {
+      for (const registration of await navigator.serviceWorker.getRegistrations()) await registration.unregister();
+    });
+    await page.reload({ waitUntil: "networkidle0" });
+
+    const search = 'input[aria-label="Search the library"]';
+    // The welcome screen means the library is still empty.
+    if (await page.$("::-p-text(Choose a file)")) {
+      await page.click("::-p-text(Choose a file)");
+      const input = await page.waitForSelector('input[type="file"]', { timeout: 10_000 });
+      await input.uploadFile(path.join(ROOT, "scripts", "media", "showcase.html"));
+      await page.waitForSelector("::-p-text(Preview)", { timeout: 15_000 });
+      await wait(800);
+      await page.click("::-p-text(Preview)");
+      const confirm = await page.waitForSelector("::-p-text(Import 28)", { timeout: 20_000 });
+      await confirm.click();
+      await page.waitForFunction(() => [...document.querySelectorAll(".bs-nav-label")].some((node) => node.textContent?.trim() === "AI startups"), { timeout: 30_000 });
+    }
+    await wait(3000);
+    await previewsSettled(page);
+
+    await clickNav(page, "AI startups");
+    await settle(page, 2000);
+    await webp(await page.screenshot(), path.join(DOCS, "showcase-startups-light.webp"));
+
+    await clickNav(page, "My projects");
+    await settle(page, 1500);
+    await clickCard(page, "Solid State");
+    await settle(page, 1500);
+    await webp(await page.screenshot(), path.join(DOCS, "showcase-project-detail.webp"));
+    await page.keyboard.press("Escape");
+
+    await clickNav(page, "All bookmarks");
+    await wait(1000);
+    await typeSlowly(page, search, "memory");
+    await page.waitForSelector('button[aria-label="Clear search"]', { timeout: 10_000 });
+    await settle(page, 1500);
+    await webp(await page.screenshot(), path.join(DOCS, "showcase-search-light.webp"));
+    await page.click('button[aria-label="Clear search"]');
+
+    await clickNav(page, "AI startups");
+    await page.click('[aria-label="List"]');
+    await settle(page, 1500);
+    await webp(await page.screenshot(), path.join(DOCS, "showcase-list-light.webp"));
+    await page.click('[aria-label="Grid"]');
+
+    await page.emulateMediaFeatures([{ name: "prefers-color-scheme", value: "dark" }]);
+    await settle(page, 1500);
+    await webp(await page.screenshot(), path.join(DOCS, "showcase-startups-dark.webp"));
+  } finally {
+    await browser.close();
   }
 }
 
