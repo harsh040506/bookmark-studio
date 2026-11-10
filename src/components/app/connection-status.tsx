@@ -7,6 +7,7 @@
 import { Chrome, Import, Plug, Server, Spinner } from "@/components/icons";
 import { Hint } from "@/components/ui/tooltip";
 import { requestBridgeAccess } from "@/lib/bridge";
+import { BROWSER_NAME } from "@/lib/env";
 import { needsPageAccess, requestPageAccess, type RuntimeState } from "@/lib/runtime";
 import { cn } from "@/lib/utils";
 
@@ -58,7 +59,7 @@ function describe(runtime: RuntimeState): { label: string; icon: React.ReactNode
   if (needsPageAccess(runtime)) return { label: "Waiting for permission to read pages", icon: <Plug size={14} />, tone: "off" };
   switch (runtime.net) {
     case "extension":
-      return { label: "Synced with Chrome", icon: <Chrome size={14} />, tone: "on" };
+      return { label: `Synced with ${BROWSER_NAME}`, icon: <Chrome size={14} />, tone: "on" };
     case "bridge":
       return { label: "Extension connected", icon: <Plug size={14} />, tone: "on" };
     case "server":

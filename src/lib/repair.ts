@@ -108,20 +108,34 @@ export function repairFolders(raw: unknown[], report?: RepairReport): Folder[] {
     if (!byId.has(folder.parentId) || folder.parentId === folder.id) {
       folder.parentId = null;
       if (report) report.repaired += 1;
-      continue;
     }
-    // Walk up; meeting this folder again means a loop.
-    const seen = new Set<string>([folder.id]);
-    let cursor: string | null = folder.parentId;
-    while (cursor) {
-      if (seen.has(cursor)) {
-        folder.parentId = null;
+  }
+
+  /*
+    Loops, found in one pass. Each folder is walked up from at most once: a folder already
+    known to reach the top ends the walk. Walking the whole chain again for every folder was
+    quadratic, which a damaged backup with one very long chain turned into seconds on every
+    page load.
+  */
+  const settled = new Set<string>();
+  for (const start of folders) {
+    if (settled.has(start.id)) continue;
+    const chain: Folder[] = [];
+    const onChain = new Set<string>();
+    let cursor: Folder | undefined = start;
+    while (cursor && !settled.has(cursor.id)) {
+      if (onChain.has(cursor.id)) {
+        // The last folder walked points back into this chain: cut the loop there.
+        const last = chain[chain.length - 1];
+        last.parentId = null;
         if (report) report.repaired += 1;
         break;
       }
-      seen.add(cursor);
-      cursor = byId.get(cursor)?.parentId ?? null;
+      chain.push(cursor);
+      onChain.add(cursor.id);
+      cursor = cursor.parentId ? byId.get(cursor.parentId) : undefined;
     }
+    for (const folder of chain) settled.add(folder.id);
   }
   return folders;
 }

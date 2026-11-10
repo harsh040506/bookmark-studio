@@ -11,6 +11,7 @@ then search them properly, see every page at a glance, and clear out the dead li
 
 [![CI](https://github.com/harsh040506/bookmark-studio/actions/workflows/ci.yml/badge.svg)](https://github.com/harsh040506/bookmark-studio/actions/workflows/ci.yml)
 [![MIT licence](https://img.shields.io/badge/licence-MIT-1f1e1d)](LICENSE)
+[![Version 6.0.0](https://img.shields.io/badge/version-6.0.0-1f1e1d)](CHANGELOG.md)
 
 **[Open the app](https://bookmark-studio-app.vercel.app)** · [Get the extension](#the-browser-extension) · [Run it yourself](#on-your-own-computer) · [Privacy](https://bookmark-studio-app.vercel.app/privacy)
 
@@ -176,7 +177,7 @@ docker run --rm -p 127.0.0.1:5174:5174 bookmark-studio
   <img src="docs/media/library-light.webp" alt="The sample library's Reading folder as a grid of large page previews, with folders in the sidebar.">
 </picture>
 
-- **Organise your way:** folders, boards and tags, plus smart collections that fill themselves from a saved search. A sparkle marks tags found in the page's own words, so you can tell them from the ones you added.
+- **Organise your way:** folders as deep as you like, with a path above each one and a searchable list for moving things; boards and tags; plus smart collections that fill themselves from a saved search. A sparkle marks tags found in the page's own words, so you can tell them from the ones you added.
 - **Find by look:** search by colour, or find pages that look alike, using image fingerprints.
 - **Keep the page itself:** offline copies stay readable with the network off.
 - **Notes and highlights** on any bookmark.
@@ -225,7 +226,7 @@ Always. Export to the standard bookmarks HTML file that every browser imports, a
 <details>
 <summary><b>How big a library can it handle?</b></summary>
 
-It's tested with real browser exports of over 1,300 links, which import in a few seconds. The grid only draws what's on screen, so much larger libraries stay smooth, and preview capture never loads more than five pages at once.
+It's tested at 10,000 bookmarks in folders eight levels deep: importing, searching inside a folder, counting, exporting and syncing with the browser all stay quick. The grid only draws what's on screen, so larger libraries stay smooth, and preview capture never loads more than five pages at once.
 </details>
 
 ## For developers

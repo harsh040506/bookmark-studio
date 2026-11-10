@@ -95,6 +95,19 @@ async function imagesReady(page, timeout = 20_000) {
   );
 }
 
+/**
+ * Reloads the app and waits for it to draw.
+ *
+ * Not for the network to go quiet: with a library loaded, the app keeps reading pages and
+ * retrying previews that will not come, so a quiet network may never arrive and the reload
+ * timed out half-way through a run.
+ */
+async function reloadApp(page) {
+  await page.reload({ waitUntil: "load" });
+  await page.waitForSelector(".bs-shell", { timeout: 30_000 });
+  await wait(800);
+}
+
 async function settle(page, ms = 600) {
   // The pointer is parked in an empty corner, so no card shows its hover tools.
   await page.mouse.move(2, (page.viewport()?.height ?? 800) - 2);
@@ -174,7 +187,11 @@ async function clickNav(page, label) {
   if (!found) throw new Error(`No sidebar entry "${label}"`);
 }
 
-/** Waits until previews have stopped arriving: nothing filling in for 15 s, or no progress for 90 s. */
+/**
+ * Waits until previews have stopped arriving: nothing filling in for 15 s, or no progress for
+ * 200 s. One batch of slow pages may take 95 s before the app gives up on it, so a shorter
+ * wait took its pictures with "Filling in 15…" still showing in the corner.
+ */
 async function previewsSettled(page) {
   const started = Date.now();
   let quietSince = 0;
@@ -191,7 +208,7 @@ async function previewsSettled(page) {
       quietSince ||= Date.now();
       if (Date.now() - quietSince > 15_000) break;
     } else quietSince = 0;
-    if (busy && Date.now() - lastChange > 90_000) {
+    if (busy && Date.now() - lastChange > 200_000) {
       console.log(`[media] ${busy} previews are not coming; carrying on`);
       break;
     }
@@ -346,13 +363,16 @@ async function sampleSet(browser) {
   await page.evaluate(async () => {
     for (const registration of await navigator.serviceWorker.getRegistrations()) await registration.unregister();
   });
-  await page.reload({ waitUntil: "networkidle0" });
+  await reloadApp(page);
 
   // The sample library, with every preview filled in.
   const search = 'input[aria-label="Search the library"]';
-  if (!(await page.$(search))) {
+  // The search box is there whether or not the library is empty, so it cannot say which.
+  // Wait for the library to open as one or the other: the welcome screen, or bookmarks.
+  await page.waitForSelector(".bs-welcome, .bs-item-card, .bs-item-row", { timeout: 30_000 });
+  if (await page.$(".bs-welcome")) {
     await page.click("text/Load the sample");
-    await page.waitForSelector(search, { timeout: 30_000 });
+    await page.waitForFunction(() => !document.querySelector(".bs-welcome"), { timeout: 60_000 });
   }
   await wait(3000);
   await previewsSettled(page);
@@ -393,7 +413,7 @@ async function sampleSet(browser) {
 
   // The walk-through: a typo forgiven, a filter typed, a bookmark opened, the layouts.
   await page.setViewport({ width: 1280, height: 800, deviceScaleFactor: 1 });
-  await page.reload({ waitUntil: "networkidle0" });
+  await reloadApp(page);
   await page.waitForSelector(search);
   await clickNav(page, "Reading");
   await settle(page, 2000);
@@ -455,7 +475,7 @@ async function showcase(executablePath) {
     await page.evaluate(async () => {
       for (const registration of await navigator.serviceWorker.getRegistrations()) await registration.unregister();
     });
-    await page.reload({ waitUntil: "networkidle0" });
+    await reloadApp(page);
 
     const search = 'input[aria-label="Search the library"]';
     // The welcome screen means the library is still empty.
@@ -537,7 +557,7 @@ async function showcase(executablePath) {
 
     // The cover walk-through. Played once to load and decode every picture, then recorded.
     await page.setViewport({ width: 1280, height: 800, deviceScaleFactor: 1 });
-    await page.reload({ waitUntil: "networkidle0" });
+    await reloadApp(page);
     await page.waitForSelector(search);
     await clickNav(page, "AI startups");
     await settle(page, 1500);

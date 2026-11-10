@@ -329,41 +329,65 @@ function bySourceOrder<T extends { sourceOrder?: number }>(a: T, b: T): number {
  * preserving the folder tree, timestamps and embedded favicons.
  */
 export function serializeNetscapeBookmarks(input: SerializeInput): string {
-  const childFolders = new Map<string | null, SerializeInput["folders"]>();
-  for (const folder of input.folders) {
-    const list = childFolders.get(folder.parentId) ?? [];
-    list.push(folder);
-    childFolders.set(folder.parentId, list);
+  type FolderRow = SerializeInput["folders"][number];
+  type BookmarkRow = SerializeInput["bookmarks"][number];
+
+  /*
+    Where each folder is written. The file is written from the top down, so anything that
+    cannot be reached from the top would be left out without a word: a folder whose parent
+    is not in this export, folders that name each other as parent, and every bookmark filed
+    in them. An export is somebody's backup, so those are written at the top level instead.
+  */
+  const byId = new Map(input.folders.map((folder) => [folder.id, folder]));
+  const parentOf = new Map<string, string | null>();
+  for (const folder of byId.values()) {
+    const parentId = folder.parentId;
+    parentOf.set(folder.id, parentId && parentId !== folder.id && byId.has(parentId) ? parentId : null);
+  }
+  const settled = new Set<string>();
+  for (const start of byId.keys()) {
+    if (settled.has(start)) continue;
+    const chain: string[] = [];
+    const onChain = new Set<string>();
+    let cursor: string | null = start;
+    while (cursor && !settled.has(cursor)) {
+      if (onChain.has(cursor)) {
+        parentOf.set(chain[chain.length - 1], null);
+        break;
+      }
+      chain.push(cursor);
+      onChain.add(cursor);
+      cursor = parentOf.get(cursor) ?? null;
+    }
+    for (const id of chain) settled.add(id);
   }
 
-  const childBookmarks = new Map<string | null, SerializeInput["bookmarks"]>();
+  const childFolders = new Map<string | null, FolderRow[]>();
+  for (const folder of byId.values()) {
+    const parentId = parentOf.get(folder.id) ?? null;
+    const list = childFolders.get(parentId) ?? [];
+    list.push(folder);
+    childFolders.set(parentId, list);
+  }
+
+  const childBookmarks = new Map<string | null, BookmarkRow[]>();
   for (const bookmark of input.bookmarks) {
-    const list = childBookmarks.get(bookmark.folderId) ?? [];
+    const folderId = bookmark.folderId && byId.has(bookmark.folderId) ? bookmark.folderId : null;
+    const list = childBookmarks.get(folderId) ?? [];
     list.push(bookmark);
-    childBookmarks.set(bookmark.folderId, list);
+    childBookmarks.set(folderId, list);
   }
 
   for (const list of childFolders.values()) list.sort(bySourceOrder);
   for (const list of childBookmarks.values()) list.sort(bySourceOrder);
 
-  const seconds = (ms: number) => Math.floor(ms / 1000).toString();
+  const seconds = (ms: number) => Math.floor((Number.isFinite(ms) ? ms : 0) / 1000).toString();
   const lines: string[] = [];
+  // Indentation is for people reading the file; past this depth it only makes it bigger.
+  const pad = (depth: number) => "    ".repeat(Math.min(depth, 32));
 
-  const writeLevel = (parentId: string | null, depth: number) => {
-    const pad = "    ".repeat(depth);
-    for (const folder of childFolders.get(parentId) ?? []) {
-      const toolbar = folder.toolbar ? ' PERSONAL_TOOLBAR_FOLDER="true"' : "";
-      const modified = folder.lastModifiedAt
-        ? ` LAST_MODIFIED="${seconds(folder.lastModifiedAt)}"`
-        : "";
-      lines.push(
-        `${pad}<DT><H3 ADD_DATE="${seconds(folder.addedAt)}"${modified}${toolbar}>${escapeHtml(folder.name)}</H3>`,
-      );
-      lines.push(`${pad}<DL><p>`);
-      writeLevel(folder.id, depth + 1);
-      lines.push(`${pad}</DL><p>`);
-    }
-
+  const writeBookmarks = (parentId: string | null, depth: number) => {
+    const indent = pad(depth);
     for (const bookmark of childBookmarks.get(parentId) ?? []) {
       const attributes = [
         `HREF="${escapeHtml(bookmark.url)}"`,
@@ -377,13 +401,24 @@ export function serializeNetscapeBookmarks(input: SerializeInput): string {
       }
       if (bookmark.icon) attributes.push(`ICON="${escapeHtml(bookmark.icon)}"`);
       lines.push(
-        `${pad}<DT><A ${attributes.join(" ")}>${escapeHtml(bookmark.title)}</A>`,
+        `${indent}<DT><A ${attributes.join(" ")}>${escapeHtml(bookmark.title)}</A>`,
       );
       if (bookmark.description) {
-        lines.push(`${pad}<DD>${escapeHtml(bookmark.description)}`);
+        lines.push(`${indent}<DD>${escapeHtml(bookmark.description)}`);
       }
     }
   };
+
+  /*
+    A list of steps instead of a function that calls itself, so a very deep tree cannot run
+    out of stack half-way through writing someone's backup. Steps are taken from the end, so
+    each level queues its own bookmarks first and its folders, in reverse, after.
+  */
+  type Step =
+    | { kind: "level"; parentId: string | null; depth: number }
+    | { kind: "open"; folder: FolderRow; depth: number }
+    | { kind: "close"; depth: number }
+    | { kind: "bookmarks"; parentId: string | null; depth: number };
 
   lines.push("<!DOCTYPE NETSCAPE-Bookmark-file-1>");
   lines.push("<!-- This is an automatically generated file.");
@@ -393,7 +428,36 @@ export function serializeNetscapeBookmarks(input: SerializeInput): string {
   lines.push("<TITLE>Bookmarks</TITLE>");
   lines.push("<H1>Bookmarks</H1>");
   lines.push("<DL><p>");
-  writeLevel(null, 1);
+
+  const steps: Step[] = [{ kind: "level", parentId: null, depth: 1 }];
+  while (steps.length) {
+    const step = steps.pop() as Step;
+    if (step.kind === "level") {
+      steps.push({ kind: "bookmarks", parentId: step.parentId, depth: step.depth });
+      const subfolders = childFolders.get(step.parentId) ?? [];
+      for (let position = subfolders.length - 1; position >= 0; position -= 1) {
+        const folder = subfolders[position];
+        steps.push({ kind: "close", depth: step.depth });
+        steps.push({ kind: "level", parentId: folder.id, depth: step.depth + 1 });
+        steps.push({ kind: "open", folder, depth: step.depth });
+      }
+    } else if (step.kind === "open") {
+      const { folder } = step;
+      const toolbar = folder.toolbar ? ' PERSONAL_TOOLBAR_FOLDER="true"' : "";
+      const modified = folder.lastModifiedAt
+        ? ` LAST_MODIFIED="${seconds(folder.lastModifiedAt)}"`
+        : "";
+      lines.push(
+        `${pad(step.depth)}<DT><H3 ADD_DATE="${seconds(folder.addedAt)}"${modified}${toolbar}>${escapeHtml(folder.name)}</H3>`,
+      );
+      lines.push(`${pad(step.depth)}<DL><p>`);
+    } else if (step.kind === "close") {
+      lines.push(`${pad(step.depth)}</DL><p>`);
+    } else {
+      writeBookmarks(step.parentId, step.depth);
+    }
+  }
+
   lines.push("</DL><p>");
   return lines.join("\n");
 }

@@ -17,6 +17,7 @@ import {
   putAssetBlob,
 } from "../../lib/assets";
 import * as db from "../../lib/db";
+import { log } from "../../lib/log";
 import {
   buildFolderPaths,
   
@@ -237,8 +238,10 @@ export function useImportExport(core: LibraryCore) {
 
       const replacing = mode === "replace";
       const keptRows = replacing ? keptOnReplace(bookmarksRef.current) : bookmarksRef.current;
-      const keptFolders = replacing
-        ? foldersRef.current.filter((folder) => keptRows.some((row) => row.folderId === folder.id) || !folder.importId)
+      // One pass over the rows, not one per folder.
+      const occupiedFolders = replacing ? new Set(keptRows.map((row) => row.folderId)) : null;
+      const keptFolders = occupiedFolders
+        ? foldersRef.current.filter((folder) => occupiedFolders.has(folder.id) || !folder.importId)
         : foldersRef.current;
 
       setJob({ running: true, label: `Importing ${file.name}`, done: 0, total: 1, failed: 0, cancellable: false });
@@ -339,11 +342,9 @@ export function useImportExport(core: LibraryCore) {
 
   /* -------------------------------------------------------------- export -- */
 
-  const exportLibrary = useCallback(
-    (subset?: Bookmark[], format: "html" | "json" | "csv" = "html") => {
-      const list = subset ?? bookmarksRef.current.filter((row) => !row.trashedAt);
-      const stamp = new Date().toISOString().slice(0, 10);
-
+  /** Builds one export file and hands it to the browser. Throws if it cannot be built. */
+  const writeExport = useCallback(
+    (list: Bookmark[], format: "html" | "json" | "csv", stamp: string) => {
       if (format === "json") {
         /*
          * The complete format, and it has to actually be complete.
@@ -371,7 +372,16 @@ export function useImportExport(core: LibraryCore) {
         );
       } else if (format === "csv") {
         const columns = ["title", "url", "domain", "category", "tags", "folder", "added", "health", "visits"];
-        const escape = (value: string) => `"${String(value).replace(/"/g, '""')}"`;
+        /*
+          Titles and folder names come from imported files and from the pages themselves, and
+          a spreadsheet runs any cell that starts with = + - or @ as a formula. A leading
+          apostrophe makes the cell text, which is what it always was.
+        */
+        const escape = (value: string) => {
+          const text = String(value ?? "");
+          const inert = /^[=+\-@\t\r]/.test(text) ? `'${text}` : text;
+          return `"${inert.replace(/"/g, '""')}"`;
+        };
         const rows = list.map((bookmark) =>
           [
             bookmark.title,
@@ -420,6 +430,32 @@ export function useImportExport(core: LibraryCore) {
           `bookmarks-${stamp}.html`,
         );
       }
+    },
+    [folders, boards, imports, folderPaths],
+  );
+
+  const exportLibrary = useCallback(
+    (subset?: Bookmark[], format: "html" | "json" | "csv" = "html") => {
+      const list = subset ?? bookmarksRef.current.filter((row) => !row.trashedAt);
+      const stamp = new Date().toISOString().slice(0, 10);
+
+      /*
+        An export is built as one string in memory. A very large library can exceed what the
+        browser allows for a single string, and that used to end the click with nothing: no
+        file, no message. Caught here so the person is told, and told what still works.
+      */
+      try {
+        writeExport(list, format, stamp);
+      } catch (error) {
+        log.error("export.failed", { format, count: list.length, error });
+        toast.error("The export could not be made", {
+          description:
+            format === "json"
+              ? "The library is too large to write as one backup file in this browser. Export a folder or a selection at a time."
+              : "Try exporting a folder or a selection at a time.",
+        });
+        return;
+      }
 
       logActivity("export", `Exported ${list.length} bookmarks as ${format.toUpperCase()}`, list.length);
       toast.success(`Exported ${list.length.toLocaleString()} bookmarks`, {
@@ -429,7 +465,7 @@ export function useImportExport(core: LibraryCore) {
             : `${format.toUpperCase()} file`,
       });
     },
-    [folders, boards, imports, folderPaths, logActivity],
+    [writeExport, logActivity],
   );
 
   /* -------------------------------------------------------------- uploads -- */

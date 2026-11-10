@@ -271,8 +271,9 @@ export function LibraryView({
     return (
       <div className="h-full overflow-hidden px-3 pt-1 sm:px-5">
         <div
-          className="grid gap-3.5"
-          style={{ gridTemplateColumns: `repeat(auto-fill, minmax(${columnWidth}px, 1fr))` }}
+          className={isList ? "grid gap-1.5" : "grid gap-3.5"}
+          // A list is one column; drawn as a grid, its placeholder rows sat side by side.
+          style={{ gridTemplateColumns: isList ? "1fr" : `repeat(auto-fill, minmax(${columnWidth}px, 1fr))` }}
           aria-busy
           aria-label="Loading your library"
         >

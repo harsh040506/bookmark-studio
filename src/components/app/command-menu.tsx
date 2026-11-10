@@ -45,6 +45,7 @@ import { useDeferredValue, useMemo, useState, type ReactNode } from "react";
 import type { Board, Bookmark, Folder, SmartCollection } from "@shared/types";
 import { select, type LibraryIndex } from "@/lib/engine";
 import { expandQuery } from "@/lib/fuzzy";
+import { folderEntries, rankFolders } from "@/lib/library";
 import type { Vocabulary } from "@/lib/fuzzy";
 import { parseQuery } from "@/lib/query";
 import type { Route } from "@/lib/router";
@@ -126,6 +127,12 @@ export function CommandMenu(props: CommandMenuProps) {
     return rows;
   }, [needle, deferred, props.index, props.folders, props.textIndex, props.vocabulary]);
 
+  // Prepared once per change to the tree, and only while the palette is open.
+  const folderList = useMemo(
+    () => (props.open ? folderEntries(props.folders, props.folderPaths) : []),
+    [props.open, props.folders, props.folderPaths],
+  );
+
   const places = useMemo(() => {
     const entries: { id: string; label: string; icon: ReactNode; hint?: string; route: Route }[] = [];
     const match = (value: string) => !needle || value.toLowerCase().includes(needle);
@@ -151,15 +158,22 @@ export function CommandMenu(props: CommandMenuProps) {
         });
       }
     }
-    for (const folder of props.folders) {
-      const path = props.folderPaths.get(folder.id) ?? folder.name;
-      if (match(path) && entries.length < 60) {
+    /*
+      Folders by how well they match, not by where they happen to sit in the list: the folder
+      called "Design" before the forty folders that live under it. Shown by name, with the
+      path beside it, because eight levels of path leave no room for the name itself.
+    */
+    if (needle) {
+      for (const entry of rankFolders(folderList, needle).matches.slice(0, GROUP_LIMIT)) {
+        const parent = entry.path.endsWith(entry.folder.name)
+          ? entry.path.slice(0, entry.path.length - entry.folder.name.length).replace(/ \/ $/, "")
+          : "";
         entries.push({
-          id: `folder:${folder.id}`,
-          label: path,
-          hint: "Folder",
+          id: `folder:${entry.folder.id}`,
+          label: entry.folder.name,
+          hint: parent ? `in ${parent}` : "Folder",
           icon: <FolderIcon />,
-          route: { kind: "folder", id: folder.id },
+          route: { kind: "folder", id: entry.folder.id },
         });
       }
     }
@@ -196,8 +210,22 @@ export function CommandMenu(props: CommandMenuProps) {
         });
       }
     }
-    return entries.slice(0, GROUP_LIMIT);
-  }, [needle, props.smart, props.folders, props.folderPaths, props.sources, props.tags, props.boards]);
+    if (!needle) return entries.slice(0, GROUP_LIMIT);
+    /*
+      Best matches first across every kind of place. Taking the first six in the order the
+      kinds are listed meant a tag or board with exactly the typed name could be pushed out
+      by six folders that only contained it.
+    */
+    const rank = (label: string) => {
+      const folded = label.toLowerCase();
+      return folded === needle ? 0 : folded.startsWith(needle) ? 1 : 2;
+    };
+    return entries
+      .map((entry, position) => ({ entry, position, rank: rank(entry.label) }))
+      .sort((a, b) => a.rank - b.rank || a.position - b.position)
+      .slice(0, GROUP_LIMIT + 2)
+      .map((item) => item.entry);
+  }, [needle, folderList, props.smart, props.sources, props.tags, props.boards]);
 
   const commands = useMemo(() => {
     if (!needle) return props.commands;
@@ -282,8 +310,8 @@ export function CommandMenu(props: CommandMenuProps) {
                   }}
                 >
                   {place.icon}
-                  <span className="menu-label">{place.label}</span>
-                  {place.hint ? <CommandShortcut>{place.hint}</CommandShortcut> : null}
+                  <span className="menu-label truncate">{place.label}</span>
+                  {place.hint ? <CommandShortcut className="bs-palette-hint">{place.hint}</CommandShortcut> : null}
                   <ArrowRight size={14} className="text-text-3" />
                 </CommandItem>
               ))}

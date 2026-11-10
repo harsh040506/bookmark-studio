@@ -17,6 +17,7 @@
  * instead of duplicating them.
  */
 import type { Board, Bookmark, DeviceName, Folder, ImportBatch } from "../../shared/types";
+import { repairFolders } from "./repair";
 import { getDomain } from "./text";
 import { newId } from "./utils";
 
@@ -375,6 +376,9 @@ export function parseBackup(text: string): RestoreResult {
     if (folder.parentId && !folderIds.has(folder.parentId)) folder.parentId = null;
     if (folder.importId && !importIds.has(folder.importId)) folder.importId = undefined;
   }
+  // A hand-edited or damaged backup can hold folders that name each other as parent. They
+  // would be invisible in the tree, with everything in them, until the next reload repaired them.
+  repairFolders(folders);
 
   return {
     bookmarks,

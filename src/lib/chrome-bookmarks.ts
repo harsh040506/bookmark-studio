@@ -38,7 +38,7 @@ import { classify, suggestTags } from "./classify";
 import { isVideoUrl, thumbnailUrl } from "./embeds";
 import { bookmarksApi, type BookmarksApi } from "./bookmarks-api";
 import { IS_EXTENSION } from "./env";
-import { buildFolderPaths } from "./library";
+import { MAX_FOLDER_DEPTH, buildFolderPaths } from "./library";
 import { log } from "./log";
 import { getDomain } from "./text";
 
@@ -159,23 +159,33 @@ function freshBookmark(
   };
 }
 
-/** Folds a Chrome node's structural fields into a row this library already has. */
+/**
+ * Folds a Chrome node's structural fields into a row this library already has.
+ *
+ * Returns the row itself when nothing differs. That matters more than it looks: the whole
+ * tree is compared on every open, and a new object for every row meant every bookmark was
+ * written to storage again, sent to the other copy of the library again, and stamped as
+ * "changed by the person just now", which let an untouched copy overrule a real edit made
+ * on the other side.
+ */
 function mergedBookmark(previous: Bookmark, node: chrome.bookmarks.BookmarkTreeNode, folderId: string | null): Bookmark {
-  const url = node.url ?? previous.url;
-  const next: Bookmark = {
-    ...previous,
-    folderId,
-    sourceOrder: node.index,
-  };
   // A title or URL edited by hand in this app must not be clobbered by a stale event —
   // matches the app's own rule that a background read never overwrites a hand-written
   // title. Chrome has no such concept, so the most recent write of either kind wins here.
-  if (!previous.editedAt) {
-    next.title = node.title?.trim() || previous.title;
-    if (url !== previous.url) {
-      next.url = url;
-      next.domain = getDomain(url);
-    }
+  const title = previous.editedAt ? previous.title : node.title?.trim() || previous.title;
+  const url = previous.editedAt ? previous.url : (node.url ?? previous.url);
+  if (
+    previous.folderId === folderId &&
+    previous.sourceOrder === node.index &&
+    previous.title === title &&
+    previous.url === url
+  ) {
+    return previous;
+  }
+  const next: Bookmark = { ...previous, folderId, sourceOrder: node.index, title };
+  if (url !== previous.url) {
+    next.url = url;
+    next.domain = getDomain(url);
   }
   return next;
 }
@@ -192,10 +202,15 @@ function freshFolder(node: chrome.bookmarks.BookmarkTreeNode, parentId: string |
   };
 }
 
+/** The folder itself when nothing differs, for the same reason as `mergedBookmark`. */
 function mergedFolder(previous: Folder, node: chrome.bookmarks.BookmarkTreeNode, parentId: string | null): Folder {
+  const name = node.title || previous.name;
+  if (previous.name === name && previous.parentId === parentId && previous.sourceOrder === node.index) {
+    return previous;
+  }
   return {
     ...previous,
-    name: node.title || previous.name,
+    name,
     parentId,
     sourceOrder: node.index,
     lastModifiedAt: Date.now(),
@@ -205,10 +220,130 @@ function mergedFolder(previous: Folder, node: chrome.bookmarks.BookmarkTreeNode,
 /* ---------------------------------------------------------- full reconcile */
 
 export interface ReconcileResult {
+  /** Every folder and bookmark in the browser's tree, as this library should hold them. */
   folders: Folder[];
   bookmarks: Bookmark[];
+  /** Only the ones that are new or differ from what the library has: what needs writing. */
+  changedFolders: Folder[];
+  changedBookmarks: Bookmark[];
   /** Bookmarks this library had from Chrome that are no longer in the tree. */
   removedBookmarkIds: string[];
+  /** Folders of the browser's that are gone from its tree and hold nothing here any more. */
+  removedFolderIds: string[];
+}
+
+/** A folder this young may have been made here a moment ago, after the tree was read. */
+const NEW_FOLDER_GRACE_MS = 60_000;
+
+/**
+ * The browser's folders that were deleted there while the app was closed.
+ *
+ * Deleted bookmarks were noticed on the next open; their folders were not, and stayed in
+ * the sidebar for good as empty folders nobody had made. A folder is removed only when all
+ * of this holds: it is one of the browser's (not made here or by an import), the browser's
+ * tree no longer has it, and after this sync nothing is left in it or beneath it. A folder
+ * that still holds something, such as imported bookmarks filed there, is kept as it is.
+ */
+export function vanishedBrowserFolders(
+  folders: Folder[],
+  inTree: ReadonlySet<string>,
+  occupied: ReadonlySet<string>,
+  now = Date.now(),
+): string[] {
+  const candidate = (folder: Folder) =>
+    !folder.id.startsWith("fld_") &&
+    !folder.importId &&
+    !inTree.has(folder.id) &&
+    !occupied.has(folder.id) &&
+    now - (folder.addedAt || 0) > NEW_FOLDER_GRACE_MS;
+
+  const childrenOf = new Map<string, Folder[]>();
+  for (const folder of folders) {
+    if (!folder.parentId) continue;
+    const list = childrenOf.get(folder.parentId) ?? [];
+    list.push(folder);
+    childrenOf.set(folder.parentId, list);
+  }
+
+  // Deepest first, so a folder is judged after everything under it has been.
+  const removable = new Set<string>();
+  const kept = new Set<string>();
+  for (const start of folders) {
+    const stack: { folder: Folder; expanded: boolean }[] = [{ folder: start, expanded: false }];
+    const onStack = new Set<string>();
+    while (stack.length) {
+      const top = stack[stack.length - 1];
+      const { folder } = top;
+      if (removable.has(folder.id) || kept.has(folder.id)) {
+        stack.pop();
+        continue;
+      }
+      if (!top.expanded) {
+        top.expanded = true;
+        onStack.add(folder.id);
+        for (const child of childrenOf.get(folder.id) ?? []) {
+          // A loop of parents is never removed; `repairFolders` deals with those.
+          if (onStack.has(child.id)) kept.add(folder.id);
+          else if (!removable.has(child.id) && !kept.has(child.id)) stack.push({ folder: child, expanded: false });
+        }
+        continue;
+      }
+      stack.pop();
+      onStack.delete(folder.id);
+      if (kept.has(folder.id)) continue;
+      const emptyBelow = (childrenOf.get(folder.id) ?? []).every((child) => removable.has(child.id));
+      if (candidate(folder) && emptyBelow) removable.add(folder.id);
+      else kept.add(folder.id);
+    }
+  }
+  return [...removable];
+}
+
+type TreeNode = chrome.bookmarks.BookmarkTreeNode;
+
+/** How long reconcile works before letting the page draw and respond. */
+const SLICE_MS = 12;
+
+/**
+ * Lets the page handle input and paint, then carries on.
+ *
+ * A message, not a timer: browsers slow a hidden tab's timers to one a second, which would
+ * turn a first sync in a background tab into minutes.
+ */
+function breathe(): Promise<void> {
+  return new Promise((resolve) => {
+    if (typeof MessageChannel === "undefined") {
+      setTimeout(resolve, 0);
+      return;
+    }
+    const channel = new MessageChannel();
+    channel.port1.onmessage = () => {
+      channel.port1.close();
+      resolve();
+    };
+    channel.port2.postMessage(null);
+  });
+}
+
+/**
+ * Walks a bookmarks tree without recursion.
+ *
+ * The browser's tree is as deep as the person made it, and other tools can write to it. A
+ * function that calls itself per level would overflow on a deep enough chain, which here
+ * means sync failing on every open.
+ */
+function walkTree(root: TreeNode, visit: (node: TreeNode, parent: TreeNode | null) => void): void {
+  const stack: { node: TreeNode; parent: TreeNode | null }[] = [{ node: root, parent: null }];
+  while (stack.length) {
+    const { node, parent } = stack.pop() as { node: TreeNode; parent: TreeNode | null };
+    if (!node || typeof node !== "object" || typeof node.id !== "string") continue;
+    visit(node, parent);
+    const children = Array.isArray(node.children) ? node.children : [];
+    // Pushed in reverse so they come off in the browser's own order.
+    for (let position = children.length - 1; position >= 0; position -= 1) {
+      stack.push({ node: children[position], parent: node });
+    }
+  }
 }
 
 /**
@@ -221,54 +356,97 @@ export interface ReconcileResult {
  * health, screenshots); only structural fields — title, url, folder, position — move.
  */
 export async function reconcile(
-  existingBookmarks: Bookmark[],
-  existingFolders: Folder[],
+  current: () => { bookmarks: Bookmark[]; folders: Folder[] },
 ): Promise<ReconcileResult> {
-  const [root] = await api().getTree();
-  if (!root) throw new Error("The browser returned no bookmarks tree");
+  const tree = await api().getTree();
+  const root = Array.isArray(tree) ? tree[0] : undefined;
+  if (!root || typeof root !== "object" || typeof root.id !== "string") {
+    throw new Error("The browser returned no bookmarks tree");
+  }
   learnRootIds(root);
+  // Read after the tree arrives, not before: reading the tree can take a while over the
+  // bridge, and comparing it with an older copy of the library would undo edits made meanwhile.
+  const { bookmarks: existingBookmarks, folders: existingFolders } = current();
   const existingFolderById = new Map(existingFolders.map((folder) => [folder.id, folder]));
   const existingBookmarkById = new Map(existingBookmarks.map((bookmark) => [bookmark.id, bookmark]));
+  const isRoot = (node: TreeNode | null) => !node || node.id === INVISIBLE_ROOT_ID;
 
   const folders: Folder[] = [];
+  const changedFolders: Folder[] = [];
   const seenFolderIds = new Set<string>();
-
-  const walkFolders = (node: chrome.bookmarks.BookmarkTreeNode, parentId: string | null) => {
-    if (node.id !== INVISIBLE_ROOT_ID) {
-      const previous = existingFolderById.get(node.id);
-      folders.push(previous ? mergedFolder(previous, node, parentId) : freshFolder(node, parentId));
-      seenFolderIds.add(node.id);
-    }
-    const nextParent = node.id === INVISIBLE_ROOT_ID ? null : node.id;
-    for (const child of node.children ?? []) {
-      if (isFolderNode(child)) walkFolders(child, nextParent);
-    }
-  };
-  walkFolders(root, null);
+  walkTree(root, (node, parent) => {
+    if (!isFolderNode(node) || isRoot(node) || seenFolderIds.has(node.id)) return;
+    seenFolderIds.add(node.id);
+    const parentId = isRoot(parent) ? null : (parent as TreeNode).id;
+    const previous = existingFolderById.get(node.id);
+    const folder = previous ? mergedFolder(previous, node, parentId) : freshFolder(node, parentId);
+    folders.push(folder);
+    if (folder !== previous) changedFolders.push(folder);
+  });
 
   const folderPaths = buildFolderPaths(folders);
   const bookmarks: Bookmark[] = [];
+  const changedBookmarks: Bookmark[] = [];
   const seenBookmarkIds = new Set<string>();
-
-  const walkBookmarks = (node: chrome.bookmarks.BookmarkTreeNode, folderId: string | null) => {
-    for (const child of node.children ?? []) {
-      if (isFolderNode(child)) {
-        walkBookmarks(child, child.id);
-      } else {
-        const previous = existingBookmarkById.get(child.id);
-        const path = folderId ? (folderPaths.get(folderId) ?? "") : "";
-        bookmarks.push(previous ? mergedBookmark(previous, child, folderId) : freshBookmark(child, folderId, path));
-        seenBookmarkIds.add(child.id);
-      }
+  const unseen: { node: TreeNode; folderId: string | null }[] = [];
+  walkTree(root, (node, parent) => {
+    if (isFolderNode(node) || seenBookmarkIds.has(node.id)) return;
+    seenBookmarkIds.add(node.id);
+    const folderId = isRoot(parent) ? null : (parent as TreeNode).id;
+    const previous = existingBookmarkById.get(node.id);
+    if (!previous) {
+      unseen.push({ node, folderId });
+      return;
     }
-  };
-  walkBookmarks(root, null);
+    const bookmark = mergedBookmark(previous, node, folderId);
+    bookmarks.push(bookmark);
+    if (bookmark !== previous) changedBookmarks.push(bookmark);
+  });
+
+  /*
+    Bookmarks this library has never seen each need a category and tags worked out, which is
+    most of the cost of a first sync: over a second for ten thousand, with the page frozen.
+    They are done in short slices with a pause between. Rows the library already has were
+    compared above in one go, so nothing here is working from a copy that can go stale.
+  */
+  let sliceStarted = Date.now();
+  let paused = false;
+  for (const { node, folderId } of unseen) {
+    const path = folderId ? (folderPaths.get(folderId) ?? "") : "";
+    const bookmark = freshBookmark(node, folderId, path);
+    bookmarks.push(bookmark);
+    changedBookmarks.push(bookmark);
+    if (Date.now() - sliceStarted > SLICE_MS) {
+      await breathe();
+      paused = true;
+      sliceStarted = Date.now();
+    }
+  }
+  if (paused) {
+    // A bookmark can have arrived another way during a pause (from the other copy of the
+    // library). The row that is here, with its tags and notes, is the one to keep.
+    const arrived = new Map(current().bookmarks.map((bookmark) => [bookmark.id, bookmark]));
+    for (let position = changedBookmarks.length - 1; position >= 0; position -= 1) {
+      const candidate = changedBookmarks[position];
+      if (!existingBookmarkById.has(candidate.id) && arrived.has(candidate.id)) changedBookmarks.splice(position, 1);
+    }
+  }
 
   const removedBookmarkIds = existingBookmarks
     .filter((bookmark) => bookmark.sourceId === CHROME_SOURCE_ID && !seenBookmarkIds.has(bookmark.id))
     .map((bookmark) => bookmark.id);
 
-  return { folders, bookmarks, removedBookmarkIds };
+  // What is still filed where, once this sync's removals are counted, read as it is now.
+  const removedBookmarks = new Set(removedBookmarkIds);
+  const latest = current();
+  const occupied = new Set<string>();
+  for (const bookmark of latest.bookmarks) {
+    if (bookmark.folderId && !removedBookmarks.has(bookmark.id)) occupied.add(bookmark.folderId);
+  }
+  for (const bookmark of bookmarks) if (bookmark.folderId) occupied.add(bookmark.folderId);
+  const removedFolderIds = vanishedBrowserFolders(latest.folders, seenFolderIds, occupied);
+
+  return { folders, bookmarks, changedFolders, changedBookmarks, removedBookmarkIds, removedFolderIds };
 }
 
 /* ------------------------------------------------------------- write-back */
@@ -327,6 +505,52 @@ export async function createBookmarkNode(
 }
 
 /**
+ * How many changes are sent to the browser at once.
+ *
+ * Moving or deleting thousands of bookmarks used to send every request in the same instant.
+ * Besides flooding the extension, that started every echo mark's eight seconds at once: the
+ * browser needs longer than that to work through ten thousand moves, so the later echoes
+ * were mistaken for the person's own changes, and a late "removed" echo deleted a bookmark
+ * that had only been moved to the trash. A short queue sends a few at a time and marks each
+ * one as it is actually sent.
+ */
+const WRITE_CONCURRENCY = 6;
+let writing = 0;
+const writeQueue: (() => void)[] = [];
+
+/** Sends one change to the browser. Resolves whether the browser now agrees; never rejects. */
+function writeBack(id: string, operation: MirrorOperation, send: (target: BookmarksApi) => Promise<unknown>): Promise<boolean> {
+  return new Promise<boolean>((resolve) => {
+    const run = () => {
+      writing += 1;
+      let request: Promise<unknown>;
+      try {
+        markPending(id);
+        request = send(api());
+      } catch (error) {
+        request = Promise.reject(error);
+      }
+      request
+        .then(
+          () => true,
+          (error: unknown) => {
+            mirrorFailed(operation, error);
+            // Nothing to change on a bookmark the browser does not hold (an imported one).
+            return isMissingNode(error);
+          },
+        )
+        .then((agreed) => {
+          writing -= 1;
+          resolve(agreed);
+          writeQueue.shift()?.();
+        });
+    };
+    if (writing < WRITE_CONCURRENCY) run();
+    else writeQueue.push(run);
+  });
+}
+
+/**
  * Every write-back function below is `async` and never rejects — a caller that only
  * needs "fire and forget" can call it without `await` or a `.catch`, and a caller that
  * needs one write to land before the next starts (see `deleteFolder` in
@@ -334,22 +558,42 @@ export async function createBookmarkNode(
  */
 export async function updateBookmarkNode(id: string, changes: { title?: string; url?: string }): Promise<void> {
   if (!isChromeBookmarksAvailable()) return;
-  markPending(id);
-  await api().update(id, changes).catch((error: unknown) => mirrorFailed("update", error));
+  await writeBack(id, "update", (target) => target.update(id, changes));
 }
 
-export async function moveBookmarkNode(id: string, folderId: string | null): Promise<void> {
-  if (!isChromeBookmarksAvailable()) return;
-  markPending(id);
-  await api()
-    .move(id, { parentId: toChromeParentId(folderId) })
-    .catch((error: unknown) => mirrorFailed("move", error));
+/**
+ * Resolves `false` only when the browser was asked and refused. A caller about to remove
+ * the folder the bookmark was in (`deleteFolder`) has to know, or the browser deletes the
+ * bookmark along with the folder.
+ */
+export async function moveBookmarkNode(id: string, folderId: string | null): Promise<boolean> {
+  if (!isChromeBookmarksAvailable()) return true;
+  return writeBack(id, "move", (target) => target.move(id, { parentId: toChromeParentId(folderId) }));
+}
+
+/**
+ * Moves a folder in the browser. Resolves `false` when the browser refused (its fixed
+ * top-level folders cannot be moved), so the caller can leave the folder where it is.
+ */
+export async function moveFolderNode(id: string, parentId: string | null): Promise<boolean> {
+  if (!isChromeBookmarksAvailable()) return true;
+  return writeBack(id, "move", (target) => target.move(id, { parentId: toChromeParentId(parentId) }));
+}
+
+/**
+ * Whether the browser holds a folder under this id.
+ *
+ * Folders made here or by an import carry this app's own ids; the browser's are its own
+ * (numbers in Chrome, short codes in Firefox). There is no mapping table, so the id is the
+ * only thing that says which kind a folder is.
+ */
+export function isBrowserFolderId(id: string): boolean {
+  return isChromeBookmarksAvailable() && !id.startsWith("fld_");
 }
 
 export async function removeBookmarkNode(id: string): Promise<void> {
   if (!isChromeBookmarksAvailable()) return;
-  markPending(id);
-  await api().remove(id).catch((error: unknown) => mirrorFailed("remove", error));
+  await writeBack(id, "remove", (target) => target.remove(id));
 }
 
 export async function createFolderNode(parentId: string | null, title: string): Promise<string | null> {
@@ -366,8 +610,7 @@ export async function createFolderNode(parentId: string | null, title: string): 
 
 export async function renameFolderNode(id: string, title: string): Promise<void> {
   if (!isChromeBookmarksAvailable()) return;
-  markPending(id);
-  await api().update(id, { title }).catch((error: unknown) => mirrorFailed("rename-folder", error));
+  await writeBack(id, "rename-folder", (target) => target.update(id, { title }));
 }
 
 /**
@@ -380,38 +623,58 @@ export async function renameFolderNode(id: string, title: string): Promise<void>
  */
 export async function removeFolderNode(id: string): Promise<void> {
   if (!isChromeBookmarksAvailable()) return;
-  markPending(id);
-  await api().removeTree(id).catch((error: unknown) => mirrorFailed("remove-folder", error));
+  await writeBack(id, "remove-folder", (target) => target.removeTree(id));
 }
 
 /* ---------------------------------------------------------------- live sync */
 
+/**
+ * What the library does with changes made on the browser's side.
+ *
+ * Changes arrive as *what changed*, not as whole rows. The library applies them a moment
+ * later, in batches (the browser's own sync can deliver thousands of events in a burst), and
+ * a whole row built when the event arrived would overwrite anything the person did to that
+ * bookmark in between.
+ */
 export interface ChromeSyncHandlers {
-  /** A bookmark was created or structurally changed on the Chrome side. */
-  onBookmarkUpserted: (bookmark: Bookmark) => void;
+  /** A bookmark this library has not seen appeared in the browser. */
+  onBookmarkCreated: (bookmark: Bookmark) => void;
+  /** Fields of a known bookmark changed in the browser. */
+  onBookmarkPatched: (id: string, patch: Partial<Bookmark>) => void;
   onBookmarkRemoved: (ids: string[]) => void;
-  onFolderUpserted: (folder: Folder) => void;
+  onFolderCreated: (folder: Folder) => void;
+  onFolderPatched: (id: string, patch: Partial<Folder>) => void;
   onFolderRemoved: (ids: string[]) => void;
   /** A bulk change (Chrome's own bookmark import, or a large paste) landed all at once. */
   onBulkChange: () => void;
-  /** Current snapshots, read fresh each time a handler needs to look something up. */
-  getBookmarks: () => Bookmark[];
-  getFolders: () => Folder[];
+  /** One row as the library holds it now, including changes not applied yet. */
+  findBookmark: (id: string) => Bookmark | undefined;
+  findFolder: (id: string) => Folder | undefined;
 }
 
-function collectSubtreeIds(node: chrome.bookmarks.BookmarkTreeNode): { bookmarkIds: string[]; folderIds: string[] } {
+function collectSubtreeIds(node: TreeNode): { bookmarkIds: string[]; folderIds: string[] } {
   const bookmarkIds: string[] = [];
   const folderIds: string[] = [];
-  const walk = (current: chrome.bookmarks.BookmarkTreeNode) => {
-    if (isFolderNode(current)) {
-      folderIds.push(current.id);
-      for (const child of current.children ?? []) walk(child);
-    } else {
-      bookmarkIds.push(current.id);
-    }
-  };
-  walk(node);
+  walkTree(node, (current) => {
+    if (isFolderNode(current)) folderIds.push(current.id);
+    else bookmarkIds.push(current.id);
+  });
   return { bookmarkIds, folderIds };
+}
+
+/** One folder's path, by walking up from it. Naming every folder for one event was the cost of the whole tree per bookmark. */
+function folderPathOf(findFolder: (id: string) => Folder | undefined, folderId: string | null): string {
+  const names: string[] = [];
+  const seen = new Set<string>();
+  let cursor = folderId;
+  while (cursor && !seen.has(cursor) && names.length < MAX_FOLDER_DEPTH) {
+    seen.add(cursor);
+    const folder = findFolder(cursor);
+    if (!folder) break;
+    names.unshift(folder.name);
+    cursor = folder.parentId;
+  }
+  return names.join(" / ");
 }
 
 /**
@@ -427,89 +690,102 @@ export function startSync(handlers: ChromeSyncHandlers): () => void {
   const bookmarks = api();
   let importing = false;
 
-  const onCreated = (id: string, node: chrome.bookmarks.BookmarkTreeNode) => {
-    if (importing || consumePending(id)) return;
-    if (isFolderNode(node)) {
-      handlers.onFolderUpserted(freshFolder(node, node.parentId ?? null));
-    } else {
-      const folderId = node.parentId ?? null;
-      const folders = handlers.getFolders();
-      const path = folderId ? (buildFolderPaths(folders).get(folderId) ?? "") : "";
-      handlers.onBookmarkUpserted(freshBookmark(node, folderId, path));
-    }
-  };
+  /*
+    Every listener below runs inside the browser's event dispatch. One that throws on an
+    unexpected payload would surface as an unhandled error per event, so each is contained
+    and logged; the next full reconcile corrects whatever it missed.
+  */
+  const contained =
+    <A extends unknown[]>(event: string, listener: (...args: A) => void) =>
+    (...args: A) => {
+      try {
+        listener(...args);
+      } catch (error) {
+        log.warn("chrome-sync.event-failed", { event, error });
+      }
+    };
 
-  const onRemoved = (
-    id: string,
-    removeInfo: chrome.bookmarks.BookmarkRemoveInfo,
-  ) => {
+  const onCreated = contained("created", (id: string, node: TreeNode) => {
     if (importing || consumePending(id)) return;
-    const node = removeInfo.node;
+    if (!node || typeof node.id !== "string") return;
+    const parentId = typeof node.parentId === "string" && node.parentId !== INVISIBLE_ROOT_ID ? node.parentId : null;
+    if (isFolderNode(node)) {
+      handlers.onFolderCreated(freshFolder(node, parentId));
+    } else {
+      handlers.onBookmarkCreated(freshBookmark(node, parentId, folderPathOf(handlers.findFolder, parentId)));
+    }
+  });
+
+  const onRemoved = contained("removed", (id: string, removeInfo: chrome.bookmarks.BookmarkRemoveInfo) => {
+    if (importing || consumePending(id)) return;
+    const node = removeInfo?.node;
     if (node && isFolderNode(node)) {
       const { bookmarkIds, folderIds } = collectSubtreeIds(node);
       if (bookmarkIds.length) handlers.onBookmarkRemoved(bookmarkIds);
-      handlers.onFolderRemoved(folderIds);
+      handlers.onFolderRemoved(folderIds.includes(id) ? folderIds : [id, ...folderIds]);
     } else {
+      // In the trash here means this app removed it from the browser itself. Whatever the
+      // echo mark says, that must never delete the copy the person can still restore.
+      if (handlers.findBookmark(id)?.trashedAt) return;
       handlers.onBookmarkRemoved([id]);
     }
-  };
+  });
 
-  const onChanged = (id: string, changeInfo: chrome.bookmarks.BookmarkChangeInfo) => {
-    if (importing || consumePending(id)) return;
-    const bookmark = handlers.getBookmarks().find((row) => row.id === id);
+  const onChanged = contained("changed", (id: string, changeInfo: chrome.bookmarks.BookmarkChangeInfo) => {
+    if (importing || consumePending(id) || !changeInfo) return;
+    const bookmark = handlers.findBookmark(id);
     if (bookmark) {
       if (bookmark.editedAt) return; // hand-edited locally; Chrome's title/url loses.
-      const url = changeInfo.url ?? bookmark.url;
-      handlers.onBookmarkUpserted({
-        ...bookmark,
-        title: changeInfo.title?.trim() || bookmark.title,
-        url,
-        domain: url !== bookmark.url ? getDomain(url) : bookmark.domain,
-      });
+      const patch: Partial<Bookmark> = {};
+      const title = typeof changeInfo.title === "string" ? changeInfo.title.trim() : "";
+      if (title && title !== bookmark.title) patch.title = title;
+      if (typeof changeInfo.url === "string" && changeInfo.url !== bookmark.url) {
+        patch.url = changeInfo.url;
+        patch.domain = getDomain(changeInfo.url);
+      }
+      if (Object.keys(patch).length) handlers.onBookmarkPatched(id, patch);
       return;
     }
-    const folder = handlers.getFolders().find((row) => row.id === id);
-    if (folder && changeInfo.title) {
-      handlers.onFolderUpserted({ ...folder, name: changeInfo.title, lastModifiedAt: Date.now() });
+    const folder = handlers.findFolder(id);
+    if (folder && typeof changeInfo.title === "string" && changeInfo.title && changeInfo.title !== folder.name) {
+      handlers.onFolderPatched(id, { name: changeInfo.title, lastModifiedAt: Date.now() });
     }
-  };
+  });
 
-  const onMoved = (id: string, moveInfo: chrome.bookmarks.BookmarkMoveInfo) => {
-    if (importing || consumePending(id)) return;
-    const bookmark = handlers.getBookmarks().find((row) => row.id === id);
+  const onMoved = contained("moved", (id: string, moveInfo: chrome.bookmarks.BookmarkMoveInfo) => {
+    if (importing || consumePending(id) || !moveInfo || typeof moveInfo.parentId !== "string") return;
+    const bookmark = handlers.findBookmark(id);
     if (bookmark) {
-      handlers.onBookmarkUpserted({ ...bookmark, folderId: moveInfo.parentId, sourceOrder: moveInfo.index });
+      if (bookmark.folderId === moveInfo.parentId && bookmark.sourceOrder === moveInfo.index) return;
+      handlers.onBookmarkPatched(id, { folderId: moveInfo.parentId, sourceOrder: moveInfo.index });
       return;
     }
-    const folder = handlers.getFolders().find((row) => row.id === id);
-    if (folder) {
-      handlers.onFolderUpserted({ ...folder, parentId: moveInfo.parentId, sourceOrder: moveInfo.index });
+    // A folder named as its own parent would vanish from the tree along with its contents.
+    if (handlers.findFolder(id) && moveInfo.parentId !== id) {
+      handlers.onFolderPatched(id, { parentId: moveInfo.parentId, sourceOrder: moveInfo.index });
     }
-  };
+  });
 
-  const onReordered = (id: string, reorderInfo: chrome.bookmarks.BookmarkReorderInfo) => {
-    if (importing) return;
-    const bookmarksById = new Map(handlers.getBookmarks().map((row) => [row.id, row]));
-    const foldersById = new Map(handlers.getFolders().map((row) => [row.id, row]));
+  const onReordered = contained("reordered", (_id: string, reorderInfo: chrome.bookmarks.BookmarkReorderInfo) => {
+    if (importing || !Array.isArray(reorderInfo?.childIds)) return;
     reorderInfo.childIds.forEach((childId, index) => {
-      const bookmark = bookmarksById.get(childId);
+      const bookmark = handlers.findBookmark(childId);
       if (bookmark) {
-        if (bookmark.sourceOrder !== index) handlers.onBookmarkUpserted({ ...bookmark, sourceOrder: index });
+        if (bookmark.sourceOrder !== index) handlers.onBookmarkPatched(childId, { sourceOrder: index });
         return;
       }
-      const folder = foldersById.get(childId);
-      if (folder && folder.sourceOrder !== index) handlers.onFolderUpserted({ ...folder, sourceOrder: index });
+      const folder = handlers.findFolder(childId);
+      if (folder && folder.sourceOrder !== index) handlers.onFolderPatched(childId, { sourceOrder: index });
     });
-    void id;
-  };
+  });
 
   const onImportBegan = () => {
     importing = true;
   };
-  const onImportEnded = () => {
+  const onImportEnded = contained("import-ended", () => {
     importing = false;
     handlers.onBulkChange();
-  };
+  });
 
   bookmarks.onCreated.addListener(onCreated);
   bookmarks.onRemoved.addListener(onRemoved);

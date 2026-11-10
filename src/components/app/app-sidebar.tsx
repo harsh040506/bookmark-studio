@@ -26,6 +26,7 @@ import {
   Clock,
   Copy,
   Folder as FolderIcon,
+  FolderInput,
   Hash,
   Heart,
   Layers,
@@ -39,13 +40,13 @@ import {
   TriangleAlert,
   Unlink,
 } from "@/components/icons";
-import { useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 
 import type { Board, Folder, ImportBatch, SmartCollection } from "@shared/types";
 import type { FacetCounts } from "@/lib/engine";
 import type { SourceWithCount } from "@/lib/sources";
 import type { Route } from "@/lib/router";
-import { compareFolders, folderChildren } from "@/lib/library";
+import { folderAncestors, folderChildren, folderTotals } from "@/lib/library";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -77,6 +78,7 @@ export interface SidebarProps {
   hydrating: boolean;
   onCreateFolder: (parentId: string | null) => void;
   onRenameFolder: (folder: Folder) => void;
+  onMoveFolder: (folder: Folder) => void;
   onDeleteFolder: (folder: Folder) => void;
   onCreateBoard: () => void;
   onRenameBoard: (board: Board) => void;
@@ -103,6 +105,19 @@ function Count({ value, yields }: { value: number; yields?: boolean }) {
   );
 }
 
+/**
+ * How far a nested row is pushed in.
+ *
+ * A full step per level for the first four, then a smaller one, then none. The rail is a
+ * fixed width, and a full step at every level left a folder eight levels down with no room
+ * for its own name.
+ */
+function rowIndent(depth: number): number {
+  const full = Math.min(depth, 4);
+  const half = Math.min(Math.max(depth - 4, 0), 6);
+  return full * 14 + half * 7;
+}
+
 /** A sidebar row, drawn like a `.menu-item`: 32 px, ghost hover, selected on the 10 % fill. */
 function Row({
   icon,
@@ -116,6 +131,7 @@ function Row({
   onContextMenu,
   expanded,
   onToggle,
+  title,
 }: {
   icon?: ReactNode;
   label: ReactNode;
@@ -129,6 +145,8 @@ function Row({
   /** Set for a folder with subfolders: whether they are showing, and how to toggle them. */
   expanded?: boolean;
   onToggle?: () => void;
+  /** Shown on hover: the whole path of a folder whose name is cut short or repeated. */
+  title?: string;
 }) {
   return (
     <div className={cn("bs-nav-row", active && "is-on")}>
@@ -136,7 +154,8 @@ function Row({
         type="button"
         onClick={onClick}
         onContextMenu={onContextMenu}
-        style={{ paddingLeft: 8 + indent * 14 }}
+        title={title}
+        style={{ paddingLeft: 8 + rowIndent(indent) }}
         className="bs-nav-button"
         aria-current={active ? "page" : undefined}
         aria-expanded={onToggle ? Boolean(expanded) : undefined}
@@ -251,19 +270,23 @@ function AddButton({ label, onClick }: { label: string; onClick: () => void }) {
 
 function FolderTree({
   folders,
+  folderPaths,
   counts,
   route,
   navigate,
   onCreateFolder,
   onRenameFolder,
+  onMoveFolder,
   onDeleteFolder,
 }: {
   folders: Folder[];
+  folderPaths: Map<string, string>;
   counts: Map<string, number>;
   route: Route;
   navigate: (route: Route) => void;
   onCreateFolder: (parentId: string | null) => void;
   onRenameFolder: (folder: Folder) => void;
+  onMoveFolder: (folder: Folder) => void;
   onDeleteFolder: (folder: Folder) => void;
 }) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -275,20 +298,10 @@ function FolderTree({
    * Totals that include everything nested underneath.
    *
    * A folder showing "0" while its subfolders hold four hundred rows is the single most
-   * confusing thing a tree can do. Computed once per counts map with one post-order walk
-   * rather than by summing a subtree per row, which would be quadratic on a deep tree.
+   * confusing thing a tree can do. Computed once per counts map in one walk rather than by
+   * summing a subtree per row, which would be quadratic on a deep tree.
    */
-  const totals = useMemo(() => {
-    const result = new Map<string, number>();
-    const visit = (id: string | null): number => {
-      let sum = id ? (counts.get(id) ?? 0) : 0;
-      for (const child of children.get(id) ?? []) sum += visit(child.id);
-      if (id) result.set(id, sum);
-      return sum;
-    };
-    visit(null);
-    return result;
-  }, [children, counts]);
+  const totals = useMemo(() => folderTotals(folders, counts), [folders, counts]);
 
   const filtered = useMemo(() => {
     const needle = filter.trim().toLowerCase();
@@ -300,6 +313,27 @@ function FolderTree({
   }, [filter, folders, totals]);
 
   const activeId = route.kind === "folder" ? route.id : null;
+  const treeLoaded = folders.length > 0;
+
+  /*
+    Open the tree down to wherever the person is. A folder reached from search, the command
+    palette, a bookmark's detail panel or a reload used to leave the tree closed, so in a
+    library nested several levels deep nothing showed where they were. Only when the place
+    changes: folders they have since closed stay closed.
+  */
+  useEffect(() => {
+    if (!activeId) return;
+    const ancestors = folderAncestors(folders, activeId);
+    if (!ancestors.length) return;
+    setExpanded((current) => {
+      if (ancestors.every((id) => current.has(id))) return current;
+      const next = new Set(current);
+      for (const id of ancestors) next.add(id);
+      return next;
+    });
+    // After a reload the place is known before the folders are, hence `treeLoaded`.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- follows the place, not every folder edit
+  }, [activeId, treeLoaded]);
 
   const menuFor = (folder: Folder) => (
     <RowMenu>
@@ -308,6 +342,9 @@ function FolderTree({
       </DropdownMenuItem>
       <DropdownMenuItem onSelect={() => onRenameFolder(folder)}>
         <Pencil /> Rename
+      </DropdownMenuItem>
+      <DropdownMenuItem onSelect={() => onMoveFolder(folder)}>
+        <FolderInput /> Move to…
       </DropdownMenuItem>
       <DropdownMenuSeparator />
       <DropdownMenuItem variant="destructive" onSelect={() => onDeleteFolder(folder)}>
@@ -326,6 +363,8 @@ function FolderTree({
               key={folder.id}
               icon={<FolderIcon />}
               label={folder.name}
+              // Several folders can share a name at different depths; the path tells them apart.
+              title={folderPaths.get(folder.id)}
               count={totals.get(folder.id) ?? 0}
               active={activeId === folder.id}
               onClick={() => navigate({ kind: "folder", id: folder.id })}
@@ -348,7 +387,8 @@ function FolderTree({
     });
 
   const render = (parentId: string | null, depth: number): ReactNode[] => {
-    const list = (children.get(parentId) ?? []).slice().sort(compareFolders);
+    // Already in display order: `folderChildren` sorts each list once per version of the tree.
+    const list = children.get(parentId) ?? [];
     return list.flatMap((folder) => {
       const kids = children.get(folder.id) ?? [];
       const isOpen = expanded.has(folder.id);
@@ -376,6 +416,7 @@ function FolderTree({
             )
           }
           label={folder.name}
+          title={depth > 0 ? folderPaths.get(folder.id) : undefined}
           count={totals.get(folder.id) ?? 0}
           active={activeId === folder.id}
           onClick={() => navigate({ kind: "folder", id: folder.id })}
@@ -557,11 +598,13 @@ export function AppSidebar(props: SidebarProps) {
       >
         <FolderTree
           folders={props.folders}
+          folderPaths={props.folderPaths}
           counts={facets.folders}
           route={route}
           navigate={navigate}
           onCreateFolder={props.onCreateFolder}
           onRenameFolder={props.onRenameFolder}
+          onMoveFolder={props.onMoveFolder}
           onDeleteFolder={props.onDeleteFolder}
         />
       </Section>

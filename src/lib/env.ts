@@ -23,6 +23,26 @@ export const IS_EXTENSION: boolean =
 export const IS_BACKGROUND_RUNNER: boolean =
   IS_EXTENSION && typeof location !== "undefined" && new URLSearchParams(location.search).has("runner");
 
+const USER_AGENT = typeof navigator !== "undefined" && typeof navigator.userAgent === "string" ? navigator.userAgent : "";
+
+/** Firefox installs and names things differently: a different build, a different add-ons page. */
+export const IS_FIREFOX: boolean = /\bFirefox\//.test(USER_AGENT);
+
+/**
+ * What to call the browser whose bookmarks are mirrored.
+ *
+ * The app said "Chrome" everywhere, including inside Firefox and Edge. Browsers that present
+ * themselves as Chrome (Brave, Arc, Vivaldi) still read as Chrome, which is how their own
+ * bookmark managers behave too.
+ */
+export const BROWSER_NAME: string = IS_FIREFOX
+  ? "Firefox"
+  : /\bEdg\//.test(USER_AGENT)
+    ? "Edge"
+    : /\bOPR\//.test(USER_AGENT)
+      ? "Opera"
+      : "Chrome";
+
 /** The Chrome Web Store page for the companion extension, when one has been published. */
 export const EXTENSION_STORE_URL: string = import.meta.env.VITE_EXTENSION_STORE_URL ?? "";
 

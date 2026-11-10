@@ -19,6 +19,7 @@ import type { FormatFacet, SortMode, ViewMode } from "@shared/types";
 import {
   Check,
   ChevronDown,
+  ChevronRight,
   Close,
   Command as CommandIcon,
   Export,
@@ -77,8 +78,62 @@ const FORMATS: { value: FormatFacet; label: string }[] = [
   { value: "notes", label: "Notes" },
 ];
 
+/** One folder above the place being shown. */
+export interface Crumb {
+  id: string;
+  label: string;
+}
+
+/**
+ * The folders above the current one, as a row of ways back up.
+ *
+ * Eight levels of names do not fit on a line, so the middle is folded away: the top of the
+ * tree and the two nearest parents are the ones people navigate by.
+ */
+function Crumbs({ crumbs, onCrumb }: { crumbs: Crumb[]; onCrumb: (id: string | null) => void }) {
+  const folded = crumbs.length > 4;
+  const shown = folded ? [crumbs[0], ...crumbs.slice(-2)] : crumbs;
+  const hidden = folded ? crumbs.slice(1, -2) : [];
+  return (
+    <nav aria-label="Folder path" className="contents">
+      <ol className="bs-crumbs">
+        <li>
+          <button type="button" className="bs-crumb" onClick={() => onCrumb(null)}>
+            All bookmarks
+          </button>
+        </li>
+        {shown.map((crumb, position) => (
+          <li key={crumb.id}>
+            <ChevronRight size={12} aria-hidden />
+            {folded && position === 1 ? (
+              <>
+                <span className="bs-crumb-gap" title={hidden.map((entry) => entry.label).join(" / ")}>
+                  <span aria-hidden>…</span>
+                  <span className="sr-only">
+                    {hidden.length} more folder{hidden.length === 1 ? "" : "s"}
+                  </span>
+                </span>
+                <ChevronRight size={12} aria-hidden />
+              </>
+            ) : null}
+            <button type="button" className="bs-crumb" title={crumb.label} onClick={() => onCrumb(crumb.id)}>
+              {crumb.label}
+            </button>
+          </li>
+        ))}
+      </ol>
+    </nav>
+  );
+}
+
 export interface TopbarProps {
   title: string;
+  /** The whole path of a nested place, shown when the heading is hovered. */
+  titleHint?: string;
+  /** The folders above the current one, top first. Empty anywhere that is not nested. */
+  crumbs?: Crumb[];
+  /** Go to a folder from the path, or to everything with `null`. */
+  onCrumb?: (id: string | null) => void;
   /** Shown beside the result count: background progress, connection state. */
   status?: ReactNode;
   total: number;
@@ -349,8 +404,9 @@ export function AppTopbar(props: TopbarProps) {
 
       {/* -------------------------------------------------------- page heading */}
       <div className="bs-pagehead" hidden={props.libraryEmpty}>
+        {props.crumbs?.length && props.onCrumb ? <Crumbs crumbs={props.crumbs} onCrumb={props.onCrumb} /> : null}
         <div className="bs-pagehead-title">
-          <h1 key={props.title} title={props.title}>
+          <h1 key={props.title} title={props.titleHint ?? props.title}>
             {props.title}
           </h1>
           <span className="bs-pagehead-meta tabular" role="status" aria-live="polite">

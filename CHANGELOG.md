@@ -1,5 +1,70 @@
 # Changelog
 
+## 6.0.0
+
+### Folders
+- **Move a folder.** A folder's menu has **Move to…**: pick another folder or the top level and everything inside goes with it. A folder cannot be moved into itself or its own subfolders, the browser is told when the folder is one of its own, and the move can be undone from the message that confirms it.
+- **A path above every folder.** A folder's page shows the folders above it, each one a way back up. In a deep tree the middle of the path folds away so the top and the nearest parents stay readable.
+- **Every folder can be chosen when adding or editing a bookmark.** The Folder field listed only the first 200 folders, so in a large library most folders could not be picked and a bookmark filed further down showed a blank field. It is now the same searchable list used for moving bookmarks.
+- **Choosing a folder works from the keyboard.** Type, arrow to a row, press Enter. A folder whose own name matches is listed before folders that merely sit under one that does, and each row shows the folder's name with its path beneath.
+- Deleting a folder says how many bookmarks move and where to, and how many subfolders go, before asking. If you are inside the folder, you are taken to where its bookmarks went. Large folders show progress while the browser's copy is moved.
+- Renaming or moving a folder updates search straight away. Bookmarks used to stay findable only under the old path until the next reload.
+- An address that points at a folder, board, import or collection that no longer exists says so and offers a way back, instead of an empty page titled "Folder".
+- Folder, board and collection names are limited to 200 characters.
+
+### Importing
+- A file that cannot be read says so on the review step, with what to try next. It used to show four zeros and a greyed-out button.
+- A file with nothing new in it explains why: everything is already saved, or no links were found.
+- The sample library is removed only after your own bookmarks are in. Removing it first meant a failed import left an empty library.
+- The dialog cannot be closed half-way through writing, and stays open on a failure so another source can be tried.
+- The list of sources works with the arrow keys, like any group of radio buttons.
+
+### Search and commands
+- The command palette lists folders by how well they match (the folder called "Design" before the folders under it), by name with the path beside it, and ranks an exact match of any kind first.
+- New commands: New folder (inside the current one when you are in a folder), Export as CSV, Undo and Redo.
+
+### Browsers
+- A folder deleted in the browser while the app was closed is removed here at the next sync, once nothing is left in it. Its bookmarks were already removed; the empty folder used to stay for good.
+- The app names the browser it is running in. It said "Chrome" in Firefox, Edge and Opera too.
+- Settings → Connections gives Firefox its own steps and its own download, and lists Firefox among the supported browsers.
+- Settings said the local server needs Node.js 20; it needs 22.12 or newer.
+
+### Website
+- The public pages print in black on white whatever theme is on (a dark-mode reader used to get near-white text), leave out the navigation, and write out where each link goes.
+- Buttons and boxes keep their edges in high-contrast modes, where shadows and backgrounds are not drawn.
+- The path at the top of each page lines up with the heading beneath it.
+- Pictures of the app in the README, on the about page and in link previews are re-shot from this version.
+
+### Details
+- The loading placeholder for the list layout is a list. It was drawn as a grid of rows side by side.
+- A note or alt text is saved when the panel closes or moves to another bookmark, not only when the field loses focus. Pressing Esc with the cursor still in the note could drop what had been typed.
+- Tags typed by hand are tidied: a leading `#`, extra spaces and capitals are removed, so `#Design` and `design` are one tag.
+- Clearing stored images says how much space was freed, and says so if it could not be done. Copy buttons say when the clipboard refuses.
+- The local server takes its version from one place, and a test fails if `package.json`, the lockfile, the changelog and the server ever disagree.
+
+### Large, deeply nested libraries
+- Tested at 10,000 bookmarks in folders eight levels deep: importing, naming and counting the tree, opening a folder with its subfolders, typing a search inside one, exporting and importing again, and syncing with the browser (`src/lib/__tests__/nesting.test.ts`, `browser-sync.test.ts`).
+- Opening the app no longer rewrites every browser bookmark. Comparing the browser's tree with the library used to save every bookmark again, send all of them to the other copy of the library, and mark each one as changed by you just now, which could let an untouched copy overrule a real edit made on the other side. Only bookmarks and folders that actually differ are written now; an unchanged library costs one read of the tree.
+- Changes made in the browser arrive in batches. The browser reports one event per bookmark, and its own sync, a dragged folder or another extension can deliver thousands at once. Each used to rebuild the library, redraw and open a database transaction on its own.
+- Changes sent to the browser go a few at a time. Moving or deleting thousands of bookmarks no longer sends every request in the same instant.
+- A first sync with thousands of new bookmarks no longer freezes the page while it works out their categories and tags.
+- The folder tree opens down to the folder you are in, wherever you came from (search, the command palette, a bookmark's panel, a reload). Deep levels are indented less so names stay readable, and hovering a folder shows its whole path.
+- The tree is grouped and sorted once per change to the folders instead of on every keystroke of a search inside a folder.
+
+### Reliability
+- Exporting to a bookmarks file no longer leaves bookmarks out. A bookmark whose folder was missing from the export, or sat in folders that named each other as parent, was silently dropped along with the folder. They are written at the top level instead.
+- Deleting a folder can no longer delete bookmarks in the browser. If a bookmark could not be moved out of the folder there first, the browser's folder is kept and the app says so.
+- A bookmark in the trash is never removed because the browser reported it deleted late.
+- A picture that cannot be indexed is given up on after two tries. It was written down under a key nothing looked up, so it was queued again on every change to the library, for as long as the tab stayed open.
+- An import no longer hangs forever if the background reader crashes; the file is read again directly, or the app says the file is too large. Import errors are plain sentences.
+- Imported folders stop at 32 levels. A damaged or hostile file describing thousands of nested folders used to produce a tree that could crash every later page load; bookmarks below the limit are kept in the deepest folder that is.
+- Folder paths, folder totals, the export and the browser sync no longer use recursion, so a very deep tree from a backup, the browser or the other copy cannot overflow the stack. Repairing the tree on load is one pass.
+- A backup containing folders that name each other as parent is repaired as it is read, not at the next reload.
+- A failed export says so instead of doing nothing.
+
+### Security
+- CSV export: a title, tag or folder name beginning with `=`, `+`, `-` or `@` is written as text, so a spreadsheet does not run it as a formula.
+
 ## 5.2.0
 
 ### Background work

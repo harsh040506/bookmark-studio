@@ -39,7 +39,7 @@ import {
   WifiOff,
   X,
 } from "@/components/icons";
-import { useEffect, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import type { Board, Bookmark, DeviceName, Folder } from "@shared/types";
@@ -117,6 +117,34 @@ export function DetailPanel(props: DetailPanelProps) {
     setTagDraft("");
     setHighlightDraft("");
   }, [bookmark?.id]);
+
+  /*
+   * A note is saved when its field loses focus, and a field that is removed from the page
+   * does not always lose focus first: pressing Esc with the cursor still in it, or stepping
+   * to the next bookmark from the keyboard, closed the panel and dropped what was typed.
+   * So whatever is unsaved is also saved when the panel moves on or closes.
+   */
+  const drafts = useRef({ note, alt, setNote: props.onSetNote, setAlt: props.onSetAlt });
+  drafts.current = { note, alt, setNote: props.onSetNote, setAlt: props.onSetAlt };
+  /** The bookmark as it was last drawn: the one the drafts in hand were typed about. */
+  const drawn = useRef(bookmark);
+  useEffect(() => {
+    const id = bookmark?.id;
+    if (!id) return;
+    return () => {
+      // Runs before the drafts are reseeded for the next bookmark, so they are still this one's.
+      const row = drawn.current;
+      if (!row || row.id !== id) return;
+      const latest = drafts.current;
+      if ((row.note ?? "") !== latest.note.trim()) latest.setNote(id, latest.note);
+      if ((row.alt ?? "") !== latest.alt.trim()) latest.setAlt(id, latest.alt);
+    };
+  }, [bookmark?.id]);
+  useEffect(() => {
+    if (bookmark) drawn.current = bookmark;
+  });
+  const noteId = useId();
+  const altId = useId();
 
   useEffect(() => {
     if (!copied) return;
@@ -325,6 +353,7 @@ export function DetailPanel(props: DetailPanelProps) {
                   onChange={(event) => setTagDraft(event.target.value)}
                   placeholder="Add tag…"
                   aria-label="Add a tag"
+                  maxLength={60}
                   className="bs-tag-input"
                 />
               </form>
@@ -335,8 +364,12 @@ export function DetailPanel(props: DetailPanelProps) {
 
           {/* --------------------------------------------------------- note */}
           <div className="bs-detail-section">
-            <label className="bs-detail-label">Your note</label>
+            <label className="bs-detail-label" htmlFor={noteId}>
+              Your note
+            </label>
             <Textarea
+              id={noteId}
+              maxLength={5000}
               value={note}
               onChange={(event) => setNote(event.target.value)}
               onBlur={commitNote}
@@ -345,8 +378,12 @@ export function DetailPanel(props: DetailPanelProps) {
             />
             {row.media || row.kind === "image" ? (
               <>
-                <label className="bs-detail-label mt-2">Alt text</label>
+                <label className="bs-detail-label mt-2" htmlFor={altId}>
+                  Alt text
+                </label>
                 <Input
+                  id={altId}
+                  maxLength={500}
                   value={alt}
                   onChange={(event) => setAlt(event.target.value)}
                   onBlur={commitAlt}

@@ -43,7 +43,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 
-import type { Bookmark, FormatFacet, SortMode, ViewMode } from "../shared/types";
+import type { Bookmark, Folder, FormatFacet, SortMode, ViewMode } from "../shared/types";
 import { hasPage, wantsBrowserSync } from "../shared/types";
 import { AppSidebar } from "./components/app/app-sidebar";
 import { ConnectionStatus } from "./components/app/connection-status";
@@ -60,10 +60,10 @@ import { DetailPanel } from "./components/app/detail-panel";
 import {
   AddBookmarkDialog,
   EditBookmarkDialog,
-  FolderPickerDialog,
   SmartCollectionDialog,
   TextPromptDialog,
 } from "./components/app/dialogs";
+import { FolderPickerDialog } from "./components/app/folder-picker";
 import { LibraryView, useInitialPrefetch } from "./components/app/library-view";
 import { SelectionBar } from "./components/app/selection-bar";
 import { JobBar, SettingsDialog, type SettingsTab } from "./components/app/settings-dialog";
@@ -79,6 +79,7 @@ import { useRuntime } from "./hooks/useRuntime";
 import { useTheme } from "./hooks/useTheme";
 import { materialise, select, type Scope } from "./lib/engine";
 import { expandQuery } from "./lib/fuzzy";
+import { folderAncestors, folderSubtree } from "./lib/library";
 import { parseQuery } from "./lib/query";
 import { routeKey, useRouter } from "./lib/router";
 import { createSmartCollection, smartCounts } from "./lib/smart";
@@ -153,6 +154,7 @@ export default function App() {
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("appearance");
   const [editing, setEditing] = useState<Bookmark | null>(null);
   const [folderPickerFor, setFolderPickerFor] = useState<string[] | null>(null);
+  const [movingFolder, setMovingFolder] = useState<Folder | null>(null);
   const [tagPromptFor, setTagPromptFor] = useState<string[] | null>(null);
   const [smartDialog, setSmartDialog] = useState<{ collection: typeof library.smart[number] | null } | null>(
     null,
@@ -740,6 +742,11 @@ export default function App() {
     };
   }, [library]);
 
+  const movingFolderExcluded = useMemo(
+    () => (movingFolder ? folderSubtree(folders, movingFolder.id) : undefined),
+    [movingFolder, folders],
+  );
+
   /* ----------------------------------------------------------- the heading */
 
   const title = useMemo(() => {
@@ -747,7 +754,7 @@ export default function App() {
       case "scope":
         return SCOPE_TITLES[route.scope];
       case "folder":
-        return folderPaths.get(route.id) ?? "Folder";
+        return folders.find((folder) => folder.id === route.id)?.name ?? "Folder";
       case "tag":
         return `#${route.tag}`;
       case "category":
@@ -763,7 +770,43 @@ export default function App() {
       case "lookalike":
         return lookalikeOf ? `Looks like “${lookalikeOf.title}”` : "Look-alikes";
     }
-  }, [route, folderPaths, boards, imports, sources, activeSmart, lookalikeOf]);
+  }, [route, folders, boards, imports, sources, activeSmart, lookalikeOf]);
+
+  /** The folders above the one being shown, top first, for the path over the heading. */
+  const crumbs = useMemo(() => {
+    if (route.kind !== "folder") return [];
+    const names = new Map(folders.map((folder) => [folder.id, folder.name]));
+    return folderAncestors(folders, route.id)
+      .reverse()
+      .map((id) => ({ id, label: names.get(id) ?? "Folder" }));
+  }, [route, folders]);
+
+  /**
+   * Whether the address points at something that is not in the library.
+   *
+   * A folder deleted in another tab or in the browser, an import that was removed, an old
+   * link to a board that is gone. Only once the library has finished loading: before that,
+   * everything is "missing".
+   */
+  const missingPlace = useMemo(() => {
+    if (library.loading || library.hydrating) return null;
+    switch (route.kind) {
+      case "folder":
+        return folderPaths.has(route.id) ? null : "folder";
+      case "board":
+        return boards.some((board) => board.id === route.id) ? null : "board";
+      case "import":
+        return imports.some((batch) => batch.id === route.id) ? null : "import";
+      case "source":
+        return sources.some((entry) => entry.id === route.id) ? null : "source";
+      case "smart":
+        return activeSmart ? null : "collection";
+      case "lookalike":
+        return lookalikeOf ? null : "bookmark";
+      default:
+        return null;
+    }
+  }, [library.loading, library.hydrating, route, folderPaths, boards, imports, sources, activeSmart, lookalikeOf]);
 
   useEffect(() => {
     document.title = `${title} · Bookmark Studio`;
@@ -812,6 +855,34 @@ export default function App() {
         group: "Actions",
         run: () => library.exportLibrary(undefined, "json"),
       },
+      {
+        id: "export-csv",
+        label: "Export as CSV (for a spreadsheet)",
+        icon: <Download />,
+        group: "Actions",
+        run: () => library.exportLibrary(undefined, "csv"),
+      },
+      {
+        id: "new-folder",
+        label: route.kind === "folder" && !missingPlace ? "New folder inside this one" : "New folder",
+        icon: <Plus />,
+        group: "Actions",
+        keywords: "create folder subfolder",
+        run: () =>
+          setPrompt({
+            title: "New folder",
+            label: "Name",
+            value: "",
+            confirmLabel: "Create",
+            onSubmit: (value) => void library.createFolder(value, route.kind === "folder" && !missingPlace ? route.id : null),
+          }),
+      },
+      ...(library.canUndo
+        ? [{ id: "undo", label: "Undo the last change", icon: <RefreshCw />, group: "Actions" as const, shortcut: shortcut("mod+Z"), run: library.undo }]
+        : []),
+      ...(library.canRedo
+        ? [{ id: "redo", label: "Redo", icon: <RefreshCw />, group: "Actions" as const, shortcut: shortcut("mod+shift+Z"), run: library.redo }]
+        : []),
       {
         id: "export-view",
         label: `Export these ${positions.length.toLocaleString()} as HTML`,
@@ -922,7 +993,7 @@ export default function App() {
         run: () => setShowSettings(true),
       },
     ];
-  }, [index, positions, library, settings.showScreenshots, updateSettings, theme, toggleTheme, openImport, sharePage, title]);
+  }, [index, positions, library, settings.showScreenshots, updateSettings, theme, toggleTheme, openImport, sharePage, title, route, missingPlace]);
 
   /*
     Whether to lay the page out for an empty library while it is still loading.
@@ -967,6 +1038,20 @@ export default function App() {
             setSettingsTab("connections");
             setShowSettings(true);
           }}
+        />
+      );
+    }
+    if (missingPlace) {
+      return (
+        <Empty
+          icon={<Inbox />}
+          title={`This ${missingPlace} is no longer here`}
+          description="It was deleted, perhaps in another tab or in your browser. Nothing else in the library has changed."
+          actions={
+            <Button size="sm" variant="outline" onClick={() => navigate({ kind: "scope", scope: "all" })}>
+              Go to all bookmarks
+            </Button>
+          }
         />
       );
     }
@@ -1037,7 +1122,7 @@ export default function App() {
         }
       />
     );
-  }, [facets.total, search, parsed.chips.length, inTrash, route, settings.lookalikeStrength, settings.browserSync, settings.browserSyncChosen, runtime, loadingSample, openImport, loadSample, library]);
+  }, [facets.total, missingPlace, navigate, search, parsed.chips.length, inTrash, route, settings.lookalikeStrength, settings.browserSync, settings.browserSyncChosen, runtime, loadingSample, openImport, loadSample, library]);
 
   /* ----------------------------------------------------------------- render */
 
@@ -1115,13 +1200,27 @@ export default function App() {
                 onSubmit: (value) => library.renameFolder(folder.id, value),
               })
             }
+            onMoveFolder={setMovingFolder}
             onDeleteFolder={async (folder) => {
-              const ok = await confirmDestructive(
-                `Delete “${folder.name}”?`,
-                "Bookmarks inside it move up a level; subfolders are removed.",
-                "Delete folder",
-              );
-              if (ok) library.deleteFolder(folder.id);
+              // Say exactly what goes and where the bookmarks end up, before asking.
+              const subtree = folderSubtree(folders, folder.id);
+              let inside = 0;
+              for (const id of subtree) inside += facets.folders.get(id) ?? 0;
+              const subfolders = subtree.size - 1;
+              const destination = folder.parentId ? (folders.find((entry) => entry.id === folder.parentId)?.name ?? null) : null;
+              const parts = [
+                inside
+                  ? `${inside.toLocaleString()} bookmark${inside === 1 ? "" : "s"} inside ${inside === 1 ? "moves" : "move"} to ${destination ? `“${destination}”` : "the top level"} and ${inside === 1 ? "is" : "are"} kept.`
+                  : "It holds no bookmarks.",
+                subfolders ? `${subfolders.toLocaleString()} subfolder${subfolders === 1 ? " is" : "s are"} removed with it.` : "",
+              ];
+              const ok = await confirmDestructive(`Delete “${folder.name}”?`, parts.filter(Boolean).join(" "), "Delete folder");
+              if (!ok) return;
+              // Standing inside what is about to go: step out to where the bookmarks are going.
+              if (route.kind === "folder" && subtree.has(route.id)) {
+                navigate(folder.parentId ? { kind: "folder", id: folder.parentId } : { kind: "scope", scope: "all" });
+              }
+              void library.deleteFolder(folder.id);
             }}
             onCreateBoard={() =>
               setPrompt({
@@ -1198,6 +1297,9 @@ export default function App() {
         <main className="bs-main">
           <AppTopbar
             title={title}
+            titleHint={route.kind === "folder" ? folderPaths.get(route.id) : undefined}
+            crumbs={crumbs}
+            onCrumb={(id) => navigate(id ? { kind: "folder", id } : { kind: "scope", scope: "all" })}
             total={positions.length}
             hydrating={library.hydrating}
             libraryEmpty={libraryEmpty}
@@ -1408,7 +1510,8 @@ export default function App() {
         onOpenChange={(open) => !open && setFolderPickerFor(null)}
         folders={folders}
         folderPaths={folderPaths}
-        count={folderPickerFor?.length ?? 0}
+        title={`Move ${(folderPickerFor?.length ?? 0).toLocaleString()} bookmark${folderPickerFor?.length === 1 ? "" : "s"} to a folder`}
+        createLabel={(name) => `Create “${name}” and move ${folderPickerFor?.length === 1 ? "it" : "them"} there`}
         onPick={(folderId) => {
           if (folderPickerFor) library.moveToFolder(folderPickerFor, folderId);
           setFolderPickerFor(null);
@@ -1417,6 +1520,22 @@ export default function App() {
           const folder = await library.createFolder(name, null);
           if (folderPickerFor) library.moveToFolder(folderPickerFor, folder.id);
           setFolderPickerFor(null);
+        }}
+      />
+
+      <FolderPickerDialog
+        open={Boolean(movingFolder)}
+        onOpenChange={(open) => !open && setMovingFolder(null)}
+        folders={folders}
+        folderPaths={folderPaths}
+        title={`Move “${movingFolder?.name ?? ""}”`}
+        description="Choose the folder to put it in. Everything inside moves with it."
+        noneLabel="Top level"
+        // A folder cannot go inside itself or anything beneath it.
+        exclude={movingFolderExcluded}
+        onPick={(parentId) => {
+          if (movingFolder) void library.moveFolder(movingFolder.id, parentId);
+          setMovingFolder(null);
         }}
       />
 

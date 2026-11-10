@@ -14,6 +14,7 @@
 import { Chrome, Import, Plug, Server, Shield, Sparkles } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import { requestBridgeAccess } from "@/lib/bridge";
+import { BROWSER_NAME } from "@/lib/env";
 import type { RuntimeState } from "@/lib/runtime";
 import { SAMPLE_LINK_COUNT } from "@/lib/sample";
 import { SOURCES } from "@/lib/import";
@@ -112,10 +113,10 @@ function ConnectCard({
         <span className="bs-card-icon">
           <Chrome />
         </span>
-        <h2 className="bs-card-title">Synced with Chrome</h2>
+        <h2 className="bs-card-title">Synced with {BROWSER_NAME}</h2>
         <p className="bs-card-text">
-          This library mirrors your Chrome bookmarks both ways. Star a page in Chrome and it appears here; edit it here
-          and Chrome follows. Your bookmarks bar looks empty right now.
+          This library mirrors your {BROWSER_NAME} bookmarks both ways. Star a page in {BROWSER_NAME} and it appears
+          here; edit it here and {BROWSER_NAME} follows. Your bookmarks bar looks empty right now.
         </p>
       </section>
     );

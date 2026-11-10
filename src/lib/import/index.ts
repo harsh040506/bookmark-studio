@@ -14,6 +14,7 @@
  */
 import type { Bookmark, Folder } from "../../../shared/types";
 import { buildExistingIndex, normalizeItems } from "./normalize";
+import { log } from "../log";
 import { readImportText } from "./read-text";
 import { parseBest, parseWith, type ParseOptions } from "./parsers";
 import type { ColumnMap } from "./parsers/csv";
@@ -103,6 +104,12 @@ export interface ImportOutcome {
   newFolders: Folder[];
 }
 
+/** The largest text re-read on the main thread after the worker has died. About a 10,000-bookmark export with icons. */
+const SYNC_RETRY_CHARS = 24 * 1024 * 1024;
+
+/** Said instead of the parser's own error, which is written for a developer. */
+const UNREADABLE = "This file could not be read. It may be damaged, or in a different format from the one chosen.";
+
 const FAILED = (parser: ParserId, error: string): ImportOutcome => ({
   ok: false,
   error,
@@ -150,8 +157,18 @@ export async function runImport(options: RunImportOptions): Promise<ImportOutcom
     previewOnly: options.previewOnly ?? false,
   };
 
+  /** The same work on this thread, with any failure turned into an answer. */
+  const onThisThread = (): ImportOutcome => {
+    try {
+      return runImportSync(request);
+    } catch (error) {
+      log.warn("import.failed", { parser: parsers[0], error });
+      return FAILED(parsers[0], UNREADABLE);
+    }
+  };
+
   const instance = getWorker();
-  if (!instance) return runImportSync(request);
+  if (!instance) return onThisThread();
 
   const id = nextRequestId++;
   return new Promise<ImportOutcome>((resolve) => {
@@ -160,7 +177,25 @@ export async function runImport(options: RunImportOptions): Promise<ImportOutcom
       if (settled) return;
       settled = true;
       instance.removeEventListener("message", onMessage);
+      instance.removeEventListener("error", onCrash);
+      instance.removeEventListener("messageerror", onCrash);
       resolve(outcome);
+    };
+
+    /*
+      A worker that dies (out of memory on a huge file, a script that failed to load) sends
+      no reply at all. Without this the import never finished: the progress bar stayed up,
+      could not be cancelled, and held back all background work for as long as the tab lived.
+    */
+    const onCrash = () => {
+      log.warn("import.worker-crashed", { parser: parsers[0], size: text.length });
+      // A small file is simply read here instead. A large one most likely ran the worker out
+      // of memory, and repeating that on this thread would take the whole tab down with it.
+      finish(
+        text.length <= SYNC_RETRY_CHARS
+          ? onThisThread()
+          : FAILED(parsers[0], "This file is too large for the browser to read right now. Close other tabs and try again."),
+      );
     };
 
     const onMessage = (event: MessageEvent<ImportResponse | ({ id: number } & ImportProgress)>) => {
@@ -175,11 +210,13 @@ export async function runImport(options: RunImportOptions): Promise<ImportOutcom
     };
 
     instance.addEventListener("message", onMessage);
+    instance.addEventListener("error", onCrash);
+    instance.addEventListener("messageerror", onCrash);
     try {
       instance.postMessage({ ...request, id } satisfies ImportRequest);
     } catch {
       // A structured-clone failure on a very large string is recoverable: do the work here.
-      finish(runImportSync(request));
+      finish(onThisThread());
     }
   });
 }

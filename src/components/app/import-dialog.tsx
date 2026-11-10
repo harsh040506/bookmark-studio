@@ -124,6 +124,8 @@ export function ImportDialog(props: ImportDialogProps) {
   const [dropSample, setDropSample] = useState(true);
   const [preview, setPreview] = useState<ImportOutcome | null>(null);
   const [busy, setBusy] = useState(false);
+  /** True while rows are being written: the one stretch that must not be interrupted. */
+  const [importing, setImporting] = useState(false);
   const [reading, setReading] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [sourceFilter, setSourceFilter] = useState("");
@@ -142,6 +144,7 @@ export function ImportDialog(props: ImportDialogProps) {
     setDropSample(true);
     setSourceFilter("");
     setBusy(false);
+    setImporting(false);
     setReading(false);
   }, []);
 
@@ -218,6 +221,11 @@ export function ImportDialog(props: ImportDialogProps) {
       });
       setPreview(outcome);
       setStep("review");
+    } catch (error) {
+      log.warn("import.preview-failed", { error });
+      toast.error("That file could not be previewed", {
+        description: "Try another source from the list, or choose the file again.",
+      });
     } finally {
       setBusy(false);
     }
@@ -233,6 +241,7 @@ export function ImportDialog(props: ImportDialogProps) {
       .then((outcome) => {
         if (active) setPreview(outcome);
       })
+      .catch((error: unknown) => log.warn("import.preview-failed", { error }))
       .finally(() => {
         if (active) setBusy(false);
       });
@@ -273,28 +282,67 @@ export function ImportDialog(props: ImportDialogProps) {
   const confidenceFor = (id: string) => candidates.find((entry) => entry.id === id)?.confidence ?? 0;
 
   const runImport = async () => {
-    if (!file || !source) return;
+    if (!file || !source || importing) return;
     setBusy(true);
+    setImporting(true);
     try {
-      // A replace clears the sample anyway; a merge removes it only when asked.
-      if (mode === "merge" && dropSample && props.onRemoveSample) await props.onRemoveSample();
-      await props.onImport({
+      const outcome = await props.onImport({
         file,
         source,
         csvColumns: isCsv ? columns : undefined,
         mode,
         keepDuplicates,
-        label,
+        label: label.trim().slice(0, 200),
         text,
       });
+      // Left open when it did not work, so another source can be tried without starting again.
+      if (outcome && !outcome.ok) {
+        setPreview(outcome);
+        return;
+      }
+      /*
+        The sample goes only once the real bookmarks are in. Removing it first meant a failed
+        import left the person with an empty library and nothing to show for it. A replace
+        clears the sample anyway.
+      */
+      if (outcome?.total && mode === "merge" && dropSample && props.onRemoveSample) await props.onRemoveSample();
       props.onOpenChange(false);
+    } catch (error) {
+      log.error("import.failed", { error });
+      toast.error("The import did not finish", {
+        description: "Nothing you already had was changed. Try again, or choose the file again.",
+      });
     } finally {
       setBusy(false);
+      setImporting(false);
     }
   };
 
+  /** Arrow keys move through the sources, as they do in any group of radio buttons. */
+  const onSourceKey = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    const step = event.key === "ArrowDown" || event.key === "ArrowRight" ? 1 : event.key === "ArrowUp" || event.key === "ArrowLeft" ? -1 : 0;
+    if (!step) return;
+    const radios = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="radio"]')];
+    const here = radios.indexOf(document.activeElement as HTMLButtonElement);
+    if (here === -1) return;
+    event.preventDefault();
+    const next = radios[(here + step + radios.length) % radios.length];
+    next.focus();
+    next.click();
+  };
+
+  // The one focusable source: the chosen one, or the first when none is.
+  const tabStop = source && grouped.some((entry) => entry.sources.some((candidate) => candidate.id === source.id)) ? source.id : grouped[0]?.sources[0]?.id;
+
   return (
-    <Dialog open={props.open} onOpenChange={props.onOpenChange}>
+    <Dialog
+      open={props.open}
+      onOpenChange={(open) => {
+        // Closing half-way through writing would leave no way to tell how far it got.
+        if (!open && importing) return;
+        props.onOpenChange(open);
+      }}
+    >
       <DialogContent className="max-w-[640px]">
         <DialogHeader>
           <DialogTitle>Import bookmarks</DialogTitle>
@@ -370,7 +418,7 @@ export function ImportDialog(props: ImportDialogProps) {
               />
             </div>
 
-            <div className="file-list bs-scroll-fade" role="radiogroup" aria-label="Where this file came from">
+            <div className="file-list bs-scroll-fade" role="radiogroup" aria-label="Where this file came from" onKeyDown={onSourceKey}>
               {grouped.map((entry) => (
                 <div key={entry.group} className="mb-2" role="group" aria-label={entry.group}>
                   <p className="menu-header" aria-hidden="true">{entry.group}</p>
@@ -384,6 +432,7 @@ export function ImportDialog(props: ImportDialogProps) {
                           type="button"
                           role="radio"
                           aria-checked={active}
+                          tabIndex={candidate.id === tabStop ? 0 : -1}
                           onClick={() => {
                             setSource(candidate);
                             if (candidate.parsers.includes("csv") && text) {
@@ -472,7 +521,28 @@ export function ImportDialog(props: ImportDialogProps) {
               </div>
             ) : null}
 
-            {preview ? (
+            {preview && !preview.ok ? (
+              <div className="bs-banner is-danger" role="alert">
+                <AlertTriangle />
+                <div>
+                  <p className="font-medium">This file could not be read as {source?.name ?? "that source"}</p>
+                  <p>{preview.error ?? "It may be damaged, or in a different format."} Go back and pick another source, or choose a different file.</p>
+                </div>
+              </div>
+            ) : null}
+
+            {preview?.ok && !preview.total && !busy ? (
+              <div className="bs-banner is-warning" role="status">
+                <AlertTriangle />
+                <p>
+                  {preview.duplicates + preview.internalDuplicates
+                    ? "Everything in this file is already in your library. Switch on “Keep duplicates for review” to bring it in anyway."
+                    : "No links were found in this file. If it came from somewhere else, go back and pick that source."}
+                </p>
+              </div>
+            ) : null}
+
+            {preview?.ok ? (
               <>
                 <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
                   <Stat label="Will import" value={preview.total} tone="primary" />
@@ -525,7 +595,7 @@ export function ImportDialog(props: ImportDialogProps) {
 
                 <label className="field">
                   <span className="field-label">Name this import</span>
-                  <Input value={label} onChange={(event) => setLabel(event.target.value)} placeholder="Work laptop, March" />
+                  <Input value={label} maxLength={200} onChange={(event) => setLabel(event.target.value)} placeholder="Work laptop, March" />
                 </label>
 
                 <label className="bs-check-row">
@@ -587,6 +657,7 @@ export function ImportDialog(props: ImportDialogProps) {
           {step !== "file" ? (
             <Button
               variant="ghost"
+              disabled={importing}
               onClick={() =>
                 setStep(
                   step === "review" ? (isCsv ? "columns" : "source") : step === "columns" ? "source" : "file",
@@ -598,19 +669,19 @@ export function ImportDialog(props: ImportDialogProps) {
           ) : null}
 
           <div className="ml-auto flex items-center gap-2">
-            <Button variant="outline" onClick={() => props.onOpenChange(false)}>
+            <Button variant="outline" disabled={importing} onClick={() => props.onOpenChange(false)}>
               Cancel
             </Button>
             {step === "source" ? (
               <Button
-                disabled={!source}
+                disabled={!source || busy}
                 onClick={() => (isCsv ? setStep("columns") : void runPreview())}
               >
                 {isCsv ? "Map columns" : "Preview"} <ArrowRight />
               </Button>
             ) : null}
             {step === "columns" ? (
-              <Button disabled={columns.url < 0} onClick={() => void runPreview()}>
+              <Button disabled={columns.url < 0 || busy} onClick={() => void runPreview()}>
                 Preview <ArrowRight />
               </Button>
             ) : null}
@@ -621,7 +692,9 @@ export function ImportDialog(props: ImportDialogProps) {
                 onClick={() => void runImport()}
               >
                 {busy ? <Loader2 className="animate-spin" /> : <Import />}
-                {mode === "replace"
+                {importing
+                  ? "Importing…"
+                  : mode === "replace"
                   ? `Replace with ${preview?.total.toLocaleString() ?? 0}`
                   : `Import ${preview?.total.toLocaleString() ?? 0}`}
               </Button>

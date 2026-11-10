@@ -452,12 +452,25 @@ function enqueueNeeded(bookmark: Bookmark, priority: number): void {
     if (!enabled(kind)) continue;
     if (kind !== "visual" && !page) continue;
     if (!needs(kind, bookmark)) continue;
-    // Keyed on url for link passes and on id for the visual one, since rows without a
-    // page all share the empty URL and would otherwise abandon each other.
-    const fingerprint = kind === "visual" ? bookmark.id : bookmark.url;
-    if (abandoned[kind].has(fingerprint)) continue;
+    if (abandoned[kind].has(fingerprintOf(kind, bookmark))) continue;
     push(kind, bookmark, priority);
   }
+}
+
+/**
+ * What a unit of work is given up on *by*.
+ *
+ * The address for the passes that fetch a page, so two bookmarks of one dead page are given
+ * up on together. The row's id for the picture index, since rows without a page all share
+ * the empty address and would otherwise give up on each other.
+ *
+ * One function for both the check and the record. They were written separately, and the
+ * record always used the address: a picture that could not be indexed was written down
+ * under a key nothing ever looked up, so it was queued again on every change to the library,
+ * forever, with its attempts back at zero.
+ */
+function fingerprintOf(kind: TaskKind, unit: { id: string; url: string }): string {
+  return kind === "visual" ? unit.id : unit.url;
 }
 
 function push(kind: TaskKind, bookmark: Bookmark, priority: number): void {
@@ -673,7 +686,7 @@ function retry(kind: TaskKind, entry: Entry, error?: string): void {
   entry.attempts += 1;
   if (entry.attempts >= MAX_ATTEMPTS) {
     failed += 1;
-    abandoned[kind].add(entry.url);
+    abandoned[kind].add(fingerprintOf(kind, entry));
     // Newest first, and trimmed from the tail: the most recent failures are the ones a
     // user is most likely to be able to do something about.
     failures = [

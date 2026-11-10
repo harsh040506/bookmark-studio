@@ -114,6 +114,8 @@ The target is 5,000 bookmarks comfortably and 100,000 on an ordinary laptop.
 - **Images are warmed ahead of travel**, biased in the scroll direction (`lib/prefetch.ts`).
 - **Workers** handle imports, backup parsing and building the search index on large libraries.
 - **One facet pass** produces every sidebar count.
+- **The folder tree is walked with loops, never recursion** (`lib/library.ts`): paths, totals under each folder, subtrees and ancestors each visit a folder once, and sibling lists are grouped and sorted once per version of the folder list. Imports stop creating folders below `MAX_FOLDER_DEPTH` (32); a tree that arrives deeper another way gets shortened paths instead of a stack overflow. `src/lib/__tests__/nesting.test.ts` runs 10,000 bookmarks in eight levels through import, selection, counting and export, and then the trees nobody made by hand: 50,000-deep chains, loops and missing parents.
+- **Browser bookmark sync writes only what differs.** `reconcile` returns the same object for an unchanged row, so an open with nothing new writes nothing. Events from the browser are collected as *what changed* and applied together every 80 ms (`lib/pending-changes.ts`); changes sent to the browser leave six at a time, each marked as an expected echo when it is actually sent.
 
 ## The background pipeline
 

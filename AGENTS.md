@@ -43,6 +43,8 @@ npm run media        # re-shoots README and site images (needs the build, Chrome
 
 Run `check`, `test`, `build` and `check:site` before calling a change done. CI runs the same.
 
+**Releasing:** the version is written in `package.json` (and its lockfile), `shared/version.ts`, the README badge and the top heading of `CHANGELOG.md`. `server/__tests__/version.test.ts` fails if they disagree.
+
 ## Rules that matter
 
 - **Nothing leaves the browser** except requests to sites in the user's own library, and only when a backend is connected. No analytics, telemetry, third-party scripts, fonts or CDNs. The website's Content Security Policy (`vercel.json`) enforces `'self'` only.
@@ -50,6 +52,7 @@ Run `check`, `test`, `build` and `check:site` before calling a change done. CI r
 - **Network access goes through `src/lib/api.ts`**, never a direct cross-origin `fetch` in a component. On the server, every outbound request goes through `server/safe-fetch.ts`.
 - **Never more than five browser pages loading at once**, and a browser is fully closed before another opens. `server/tab-pool.ts` and the window gate in `src/ext/background.ts` enforce this; don't bypass them.
 - **Scale:** nothing in `App.tsx` may map, filter or sort the whole library. Ask `src/lib/engine.ts` for subsets. Libraries of 100k bookmarks must stay responsive.
+- **Folder trees are walked with loops, never recursion**, and through the helpers in `src/lib/library.ts` (paths, totals, subtrees, ancestors, `folderMoveProblem`). A tree can arrive thousands of levels deep or with loops from a backup, the browser or the other copy. Choosing a folder in the interface is always `src/components/app/folder-picker.tsx`, never a plain select: there can be thousands.
 - **Storage writes** go through `writeKeyed` in `src/lib/db.ts` so failed writes are tracked and retried. Records read back are repaired by `src/lib/repair.ts`; extend it when the record shape changes.
 - **One library, two copies.** The website and the extension each store the library and swap changes (`src/lib/replica.ts`, `replication.ts`). Every write is stamped in `db.ts` and every delete leaves a tombstone, so never write or delete library records around the `db.ts` functions. Person-made changes go through `commit`, which sets `changedAt`; background results must not.
 - **Design system only.** Tokens from `src/styles/tokens.css`, controls from `src/components/ui/`, icons from `src/components/icons.tsx`. See `docs/DESIGN.md`. Both themes must work.

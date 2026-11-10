@@ -19,8 +19,10 @@ import {
   OTHER_BOOKMARKS_ID,
   createBookmarkNode,
   createFolderNode,
+  isBrowserFolderId,
   isChromeBookmarksAvailable,
   moveBookmarkNode,
+  moveFolderNode,
   removeBookmarkNode,
   removeFolderNode,
   renameFolderNode,
@@ -29,6 +31,8 @@ import {
 import { classify, suggestTags } from "../../lib/classify";
 import * as db from "../../lib/db";
 import {
+  buildFolderPaths,
+  folderMoveProblem,
   folderSubtree,
   planDuplicateCleanup,
 } from "../../lib/library";
@@ -47,6 +51,7 @@ export function useEditing(core: LibraryCore) {
     bookmarksRef,
     foldersRef,
     folderPaths,
+    rebuildTextIndex,
     logActivity,
     commit,
     undo,
@@ -320,7 +325,18 @@ export function useEditing(core: LibraryCore) {
 
   const addTags = useCallback(
     (ids: string[], tags: string[]) => {
-      const cleaned = tags.map((tag) => tag.trim().toLowerCase()).filter(Boolean);
+      /*
+        A tag is typed by hand, so it is tidied the way people mean it: "#Design " and
+        "design" are one tag, runs of spaces are one space, and nothing is longer than a tag
+        can be shown. Typing the same tag twice in one go adds it once.
+      */
+      const cleaned = [
+        ...new Set(
+          tags
+            .map((tag) => tag.trim().replace(/^#+/, "").replace(/\s+/g, " ").toLowerCase().slice(0, 60).trim())
+            .filter(Boolean),
+        ),
+      ];
       if (!cleaned.length) return;
       const rows = rowsFor(ids).map((row) => ({
         ...row,
@@ -392,7 +408,8 @@ export function useEditing(core: LibraryCore) {
   const setNote = useCallback(
     (id: string, note: string) => {
       const row = rowsFor([id])[0];
-      if (!row) return;
+      // Unchanged: saved twice (on leaving the field and again on closing) must be one edit.
+      if (!row || (row.note ?? "") === note.trim()) return;
       commit({
         label: "Edited a note",
         kind: "edit",
@@ -406,7 +423,7 @@ export function useEditing(core: LibraryCore) {
   const setAltText = useCallback(
     (id: string, alt: string) => {
       const row = rowsFor([id])[0];
-      if (!row) return;
+      if (!row || (row.alt ?? "") === alt.trim()) return;
       commit({
         label: "Edited alt text",
         kind: "edit",
@@ -452,8 +469,18 @@ export function useEditing(core: LibraryCore) {
 
   /* ------------------------------------------------------ folders, boards -- */
 
+  /**
+   * A folder's path is part of what each bookmark in it is found by, so renaming or moving a
+   * folder changes the search text of rows that did not change themselves. Rebuilt off the
+   * main thread; until this was done, a search for the new name found nothing until a reload.
+   */
+  const reindexForFolders = useCallback(
+    (next: Folder[]) => void rebuildTextIndex(bookmarksRef.current, buildFolderPaths(next)),
+    [rebuildTextIndex],
+  );
+
   const createFolder = useCallback(async (name: string, parentId: string | null) => {
-    const trimmedName = name.trim() || "New folder";
+    const trimmedName = name.trim().slice(0, 200) || "New folder";
     // Chrome has no root-level folder outside its three fixed ones, so a new top-level
     // folder here becomes a new folder inside "Other Bookmarks" — the same constraint
     // `addBookmark` and `moveToFolder` already work around.
@@ -464,26 +491,79 @@ export function useEditing(core: LibraryCore) {
       parentId: chromeId ? (parentId ?? OTHER_BOOKMARKS_ID) : parentId,
       addedAt: Date.now(),
     };
-    setFolders((current) => [...current, folder]);
-    foldersRef.current = [...foldersRef.current, folder];
-    void db.putFolders([folder]);
+    const next = [...foldersRef.current, folder];
+    setFolders(next);
+    foldersRef.current = next;
+    void db.putFolders([folder]).catch(() => undefined);
     return folder;
   }, []);
 
-  const renameFolder = useCallback((id: string, name: string) => {
-    const trimmed = name.trim();
-    if (!trimmed) return;
-    void renameFolderNode(id, trimmed);
-    setFolders((current) => {
-      const next = current.map((folder) =>
-        folder.id === id ? { ...folder, name: trimmed, lastModifiedAt: Date.now() } : folder,
-      );
+  const renameFolder = useCallback(
+    (id: string, name: string) => {
+      const trimmed = name.trim().slice(0, 200);
+      const target = foldersRef.current.find((folder) => folder.id === id);
+      if (!trimmed || !target || target.name === trimmed) return;
+      void renameFolderNode(id, trimmed);
+      const changed: Folder = { ...target, name: trimmed, lastModifiedAt: Date.now() };
+      const next = foldersRef.current.map((folder) => (folder.id === id ? changed : folder));
+      setFolders(next);
       foldersRef.current = next;
-      const changed = next.find((folder) => folder.id === id);
-      if (changed) void db.putFolders([changed]);
-      return next;
-    });
-  }, []);
+      void db.putFolders([changed]).catch(() => undefined);
+      reindexForFolders(next);
+    },
+    [reindexForFolders],
+  );
+
+  /**
+   * Moves a folder, with everything in it, under another folder or to the top level.
+   *
+   * The browser is asked first when the folder is one of its own: if it refuses (its fixed
+   * top-level folders cannot be moved), nothing changes here either, rather than the two
+   * disagreeing until the next sync quietly moves the folder back.
+   */
+  const moveFolder = useCallback(
+    async (id: string, parentId: string | null, options: { quiet?: boolean } = {}): Promise<boolean> => {
+      const problem = folderMoveProblem(foldersRef.current, id, parentId);
+      if (problem) {
+        toast.error("That folder cannot be moved there", { description: problem });
+        return false;
+      }
+      const target = foldersRef.current.find((folder) => folder.id === id);
+      if (!target) return false;
+      const browserFolder = isBrowserFolderId(id);
+      // The browser has no top level of its own to move to; "no folder" there is Other Bookmarks.
+      const nextParent = browserFolder ? (parentId ?? OTHER_BOOKMARKS_ID) : parentId;
+      if (target.parentId === nextParent) return true;
+
+      if (browserFolder && !(await moveFolderNode(id, parentId))) {
+        toast.error("Your browser would not move that folder", {
+          description: "Its own top-level folders, such as the bookmarks bar, stay where they are.",
+        });
+        return false;
+      }
+
+      // Read again: the browser's answer can take a moment, and the tree may have changed.
+      const current = foldersRef.current.find((folder) => folder.id === id);
+      if (!current || folderMoveProblem(foldersRef.current, id, parentId)) return false;
+      const previousParent = current.parentId;
+      const changed: Folder = { ...current, parentId: nextParent, lastModifiedAt: Date.now() };
+      const next = foldersRef.current.map((folder) => (folder.id === id ? changed : folder));
+      setFolders(next);
+      foldersRef.current = next;
+      void db.putFolders([changed]).catch(() => undefined);
+      reindexForFolders(next);
+      logActivity("move", `Moved the folder “${current.name}”`, 1);
+      if (!options.quiet) {
+        const destination = nextParent ? (next.find((folder) => folder.id === nextParent)?.name ?? "a folder") : null;
+        toast.success(destination ? `Moved into “${destination}”` : "Moved to the top level", {
+          description: `“${current.name}” and everything in it.`,
+          action: { label: "Undo", onClick: () => void moveFolder(id, previousParent, { quiet: true }) },
+        });
+      }
+      return true;
+    },
+    [logActivity, reindexForFolders],
+  );
 
   /**
    * Deletes a folder and everything nested under it.
@@ -494,37 +574,76 @@ export function useEditing(core: LibraryCore) {
    */
   const deleteFolder = useCallback(
     async (id: string) => {
+      const target = foldersRef.current.find((folder) => folder.id === id);
+      // Already gone: a second click, or another tab got there first.
+      if (!target) return;
       const doomed = folderSubtree(foldersRef.current, id);
-      const parentId = foldersRef.current.find((folder) => folder.id === id)?.parentId ?? null;
+      const parentId = target.parentId ?? null;
 
       const affected = bookmarksRef.current.filter(
         (bookmark) => bookmark.folderId && doomed.has(bookmark.folderId),
       );
+      let movedInBrowser = true;
+      // Moving thousands of bookmarks out in the browser takes seconds; say that it is happening.
+      const progress =
+        affected.length > 200 && isChromeBookmarksAvailable()
+          ? toast.loading(`Moving ${affected.length.toLocaleString()} bookmarks out of “${target.name}”…`)
+          : undefined;
       if (affected.length) {
         // Chrome's own copy of each bookmark has to move out *before* the folder tree
         // below is torn down, or `removeTree` destroys them along with the folder rather
         // than leaving them reparented the way this app's own model does.
-        await Promise.all(affected.map((row) => moveBookmarkNode(row.id, parentId)));
-        commit({
-          label: `Moved ${affected.length} out of a deleted folder`,
-          kind: "move",
-          next: affected.map((row) => ({ ...row, folderId: parentId })),
-        });
+        const moved = await Promise.all(affected.map((row) => moveBookmarkNode(row.id, parentId)));
+        movedInBrowser = moved.every(Boolean);
+        // Read again rather than reuse `affected`: the moves can take seconds on a large
+        // folder, and writing the copies read before them would undo edits made meanwhile.
+        const ids = new Set(affected.map((row) => row.id));
+        const current = bookmarksRef.current.filter(
+          (row) => ids.has(row.id) && row.folderId && doomed.has(row.folderId),
+        );
+        if (current.length) {
+          commit({
+            label: `Moved ${current.length} out of a deleted folder`,
+            kind: "move",
+            next: current.map((row) => ({ ...row, folderId: parentId })),
+          });
+        }
       }
-      await removeFolderNode(id);
+      /*
+        The browser's folder is only removed once every bookmark is safely out of it. If one
+        could not be moved, removing the folder would delete that bookmark in the browser and,
+        at the next sync, here. Left in place, the folder simply comes back with it.
+      */
+      if (movedInBrowser) await removeFolderNode(id);
 
       const remaining = foldersRef.current.filter((folder) => !doomed.has(folder.id));
       setFolders(remaining);
       foldersRef.current = remaining;
-      void db.deleteFolders([...doomed]);
-      logActivity("delete", `Deleted a folder and ${doomed.size - 1} subfolders`, doomed.size);
+      void db.deleteFolders([...doomed]).catch(() => undefined);
+      reindexForFolders(remaining);
+      logActivity(
+        "delete",
+        doomed.size > 1
+          ? `Deleted “${target.name}” and ${doomed.size - 1} subfolder${doomed.size === 2 ? "" : "s"}`
+          : `Deleted the folder “${target.name}”`,
+        doomed.size,
+      );
+      if (!movedInBrowser) {
+        toast.warning("The folder was kept in your browser’s bookmarks", {
+          id: progress,
+          description:
+            "Some bookmarks could not be moved out of it there, so removing it would have deleted them. It may reappear here the next time the two sync.",
+        });
+        return;
+      }
       toast.success("Folder deleted", {
+        id: progress,
         description: affected.length
           ? `${affected.length} bookmark${affected.length === 1 ? "" : "s"} moved up a level.`
           : undefined,
       });
     },
-    [commit, logActivity],
+    [commit, logActivity, reindexForFolders],
   );
 
   const createBoard = useCallback((name: string, color: string) => {
@@ -675,6 +794,7 @@ export function useEditing(core: LibraryCore) {
     removeHighlight,
     createFolder,
     renameFolder,
+    moveFolder,
     deleteFolder,
     createBoard,
     renameBoard,

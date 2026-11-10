@@ -9,11 +9,11 @@
  */
 import dns from "node:dns/promises";
 import { bareHost, ipFamily, isLocalHostname, isPrivateAddress } from "../shared/ip";
+import { MAJOR_VERSION } from "../shared/version";
 import { createBreaker } from "./breaker";
 import { pinnedRequest, PrivateAddressError } from "./pinned-fetch";
 
-export const USER_AGENT =
-  "Mozilla/5.0 (compatible; BookmarkStudio/5; +https://github.com/harsh040506/bookmark-studio)";
+export const USER_AGENT = `Mozilla/5.0 (compatible; BookmarkStudio/${MAJOR_VERSION}; +https://github.com/harsh040506/bookmark-studio)`;
 
 export const MAX_REDIRECTS = 5;
 export const DEFAULT_TIMEOUT_MS = 10_000;

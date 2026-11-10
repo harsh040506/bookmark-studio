@@ -121,6 +121,10 @@ code {
   padding: 0.12em 0.36em;
   white-space: nowrap;
 }
+/* Long words and addresses wrap instead of pushing the page wider than a phone. */
+.doc {
+  overflow-wrap: anywhere;
+}
 .visually-hidden {
   position: absolute !important;
   width: 1px;
@@ -284,6 +288,13 @@ code {
   margin: 0 0 28px;
   font-size: 13px;
   color: var(--text-3);
+}
+/* The page's own list indent must not push the path out of line with the heading under it. */
+.doc .crumbs ol {
+  padding-left: 0;
+}
+.doc .crumbs li {
+  margin: 0;
 }
 .crumbs li + li::before {
   content: "/";
@@ -507,4 +518,78 @@ tbody th {
 .not-found {
   min-height: 60vh;
   padding-top: 12vh;
+}
+
+/*
+  High-contrast modes drop shadows and backgrounds, which is how every outline on these pages
+  is drawn. Real borders stand in for them so buttons and boxes keep their edges.
+*/
+@media (forced-colors: active) {
+  .btn,
+  .toc,
+  .share,
+  .share-link input,
+  .hero-shot img {
+    border: 1px solid CanvasText;
+  }
+  .btn-primary {
+    border-color: Highlight;
+  }
+  .site-header {
+    border-bottom: 1px solid CanvasText;
+  }
+}
+
+/* On paper: the words, in black on white, with where each link goes written out. */
+@media print {
+  /* Every way the dark theme can be on is named, or a dark-mode reader prints white on white. */
+  :root,
+  :root:not([data-theme="light"]),
+  :root[data-theme="dark"] {
+    color-scheme: light;
+    --paper: #fff;
+    --ink: #000;
+    --text: #000;
+    --text-2: #222;
+    --text-3: #444;
+    --surface-2: #fff;
+    --border: #999;
+    --border-strong: #666;
+    --accent-text: #123f7a;
+    --code-bg: #eee;
+  }
+  .site-header,
+  .site-footer nav,
+  .skip,
+  .cta,
+  .share,
+  .toc {
+    display: none !important;
+  }
+  body.site {
+    font-size: 11pt;
+  }
+  .doc {
+    max-width: none;
+    padding: 0;
+  }
+  .hero-shot {
+    margin: 16pt 0;
+  }
+  .hero-shot img {
+    box-shadow: none;
+  }
+  h2,
+  h3 {
+    break-after: avoid;
+  }
+  li,
+  tr {
+    break-inside: avoid;
+  }
+  .doc a[href^="https://"]::after {
+    content: " (" attr(href) ")";
+    font-size: 0.85em;
+    word-break: break-all;
+  }
 }

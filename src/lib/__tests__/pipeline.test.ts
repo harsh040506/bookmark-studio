@@ -153,6 +153,34 @@ describe("what the pipeline decides to do", () => {
     expect(pipeline.pipelineState().pending.shot).toBe(0);
   });
 
+  it("gives up on a picture that cannot be indexed, instead of queueing it again for ever", async () => {
+    const recorder: Recorder = { captured: [], enriched: [], checked: [] };
+    let attempts = 0;
+    pipeline.setPipelineSettings({ shots: false, meta: false, health: false, visual: true });
+    pipeline.configurePipeline({
+      ...workers(recorder),
+      indexVisual: async () => {
+        attempts += 1;
+        throw new Error("The picture store is unavailable");
+      },
+    });
+    // Uploads have no address: they must not give up on each other, only on themselves.
+    const upload = (id: string) =>
+      bookmark({ id, url: "", media: { assetKey: `media:${id}`, mime: "image/png", bytes: 1 } });
+    const rows = [upload("one"), upload("two")];
+    pipeline.observeLibrary(rows);
+    await settle(1500);
+    const afterGivingUp = attempts;
+    expect(afterGivingUp).toBeGreaterThan(0);
+    expect(pipeline.pipelineState().pending.visual).toBe(0);
+
+    // The library changes, as it does on every edit. Nothing is queued again.
+    pipeline.observeLibrary([...rows]);
+    await settle(1500);
+    expect(attempts).toBe(afterGivingUp);
+    expect(pipeline.pipelineState().pending.visual).toBe(0);
+  });
+
   it("reconsiders an abandoned URL when asked to", async () => {
     const recorder: Recorder = { captured: [], enriched: [], checked: [] };
     pipeline.setPipelineSettings({ shots: true, meta: false, health: false });

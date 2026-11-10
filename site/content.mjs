@@ -33,7 +33,7 @@ export const PAGES = [
     title: "Bookmark Studio: a private bookmark manager in your browser",
     description:
       "Import bookmarks from any browser or service, search them properly, find dead links and duplicates, and see every page at a glance. Free, open source, no account.",
-    og: { image: "og/home-2.png", alt: "Bookmark Studio: a calm home for everything you save. A grid of page previews." },
+    og: { image: "og/home-3.png", alt: "Bookmark Studio: a calm home for everything you save. A grid of page previews." },
     markdownIntro: [
       { p: "Bookmark Studio is the app itself. Open it, drop in a bookmarks file (or load the sample library), and start searching. Everything is stored in your browser." },
     ],
@@ -46,7 +46,7 @@ export const PAGES = [
     title: "About Bookmark Studio: find the things you saved",
     description:
       "Years of bookmarks across browsers and services, and you still cannot find the one you need. What Bookmark Studio does about it, and how it stays private.",
-    og: { image: "og/about-2.png", alt: "You saved it for a reason. Bookmark Studio helps you find it again." },
+    og: { image: "og/about-3.png", alt: "You saved it for a reason. Bookmark Studio helps you find it again." },
     eyebrow: "About",
     heading: "You saved it for a reason. Now you can find it.",
     lede:
@@ -96,7 +96,7 @@ export const PAGES = [
             ],
           },
           { h3: "Organise your way" },
-          { p: "Folders, boards and tags, smart collections that fill themselves from a saved search, notes and highlights. Every destructive action can be undone, and an activity log shows what changed." },
+          { p: "Folders nested as deep as you like, boards and tags, smart collections that fill themselves from a saved search, notes and highlights. Every folder shows the path above it, and moving a bookmark or a whole folder is a searchable list, not a scroll. Every destructive action can be undone, and an activity log shows what changed." },
           { h3: "Take it with you" },
           { p: "Export to the standard bookmarks file every browser imports, a complete JSON backup or CSV, or share a view as a single web page with the pictures inside. Your library is never locked in." },
         ],
@@ -156,6 +156,8 @@ export const PAGES = [
           { p: "Yes. After the first visit the app opens without a connection, and offline copies of pages stay readable." },
           { h3: "Which browsers does it support?" },
           { p: "The website works in current versions of Chrome, Edge, Firefox and Safari. The extension supports Chromium-based browsers (Chrome, Edge, Brave, Arc, Opera and Vivaldi) and Firefox 128 or newer." },
+          { h3: "How big a library can it handle?" },
+          { p: "It is tested at 10,000 bookmarks in folders eight levels deep. Only what is on screen is drawn, so larger libraries stay smooth, and reading pages for previews never loads more than five at once." },
           { h3: "Can I get my bookmarks out again?" },
           { p: "Always. Export to the standard bookmarks HTML file, JSON or CSV at any time." },
         ],
@@ -178,11 +180,11 @@ export const PAGES = [
     title: "Privacy: Bookmark Studio",
     description:
       "Bookmark Studio keeps your library in your browser. No account, no analytics, no cookies, no AI. What is stored, what the network sees, and how to delete everything.",
-    og: { image: "og/privacy-2.png", alt: "Your library never leaves your browser. Bookmark Studio privacy." },
+    og: { image: "og/privacy-3.png", alt: "Your library never leaves your browser. Bookmark Studio privacy." },
     eyebrow: "Privacy",
     heading: "Your library never leaves your browser",
-    lede: "This page explains, in plain language, what Bookmark Studio stores, what it sends over the network, and how you stay in control. It covers the website, the Chrome extension and the local server.",
-    updated: "2026-11-09",
+    lede: "This page explains, in plain language, what Bookmark Studio stores, what it sends over the network, and how you stay in control. It covers the website, the browser extension and the local server.",
+    updated: "2026-11-10",
     sections: [
       {
         id: "summary",

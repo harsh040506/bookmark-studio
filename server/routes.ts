@@ -22,6 +22,7 @@
  * repeatedly — and are intentionally not durable: a restart should re-read the web
  * rather than serve answers of unknown age.
  */
+import { VERSION } from "../shared/version";
 import { load } from "cheerio";
 import { Router, type NextFunction, type Request, type Response } from "express";
 import path from "node:path";
@@ -153,7 +154,7 @@ function readUrlList(values: unknown[], limit: number): string[] {
  * Reported by `/ping` so a stale browser tab left open across a rebuild can tell that
  * the process it is talking to is no longer the one its assets came from.
  */
-const SERVER_VERSION = "5.2.0";
+const SERVER_VERSION = VERSION;
 
 /**
  * Shared budget for the routes that reach out to the wider internet.

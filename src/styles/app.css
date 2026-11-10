@@ -497,6 +497,28 @@ input[type="file"].sr-only { position: absolute; }
 .bs-file-row { cursor: pointer; color: var(--text); }
 .bs-file-row:hover, .bs-file-row:focus-visible { background: var(--ghost-hover); }
 .bs-file-row .file-name { font-weight: 400; }
+
+/* Choosing a folder: one searchable list, shared by the move dialog and the Folder field. */
+.bs-folder-chooser { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.bs-folder-chooser .file-list { max-height: min(46vh, 320px); }
+.bs-folder-option { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.bs-folder-option-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bs-folder-option-path { font-size: 12px; line-height: 16px; color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; }
+.bs-folder-option-check { flex: none; color: var(--accent); }
+.bs-folder-more { margin: 0; padding: 8px; font-size: 12.5px; color: var(--text-3); text-align: center; }
+.bs-folder-popover { width: max(var(--radix-popover-trigger-width), 300px); max-width: calc(100vw - 24px); padding: 8px; }
+
+/* A place's path in the palette: as much of it as fits, cut from the left so the nearest folder shows. */
+.bs-palette-hint { max-width: 46%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: right; }
+
+/* Where a folder sits: the folders above it, each one a way back up. */
+.bs-crumbs { display: flex; align-items: center; flex-wrap: nowrap; gap: 2px; min-width: 0; flex-basis: 100%; margin: 0 0 -4px -6px; padding: 0; list-style: none; font-size: 12.5px; color: var(--text-3); overflow: hidden; }
+.bs-crumbs li { display: flex; align-items: center; gap: 2px; min-width: 0; flex: 0 1 auto; }
+.bs-crumbs li:first-child { flex: none; }
+.bs-crumbs svg { flex: none; opacity: .7; }
+.bs-crumb { max-width: 22ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border: 0; background: transparent; color: inherit; font: inherit; padding: 2px 6px; border-radius: 6px; cursor: pointer; }
+.bs-crumb:hover, .bs-crumb:focus-visible { background: var(--ghost-hover); color: var(--text); }
+.bs-crumb-gap { padding: 2px 4px; }
 .bs-swatch { width: 22px; height: 22px; padding: 0; border: 0; border-radius: 50%; cursor: pointer; box-shadow: inset 0 0 0 1px var(--border); transition: box-shadow .12s; }
 .bs-swatch.is-on { box-shadow: 0 0 0 2px var(--popover), 0 0 0 4px var(--accent); }
 

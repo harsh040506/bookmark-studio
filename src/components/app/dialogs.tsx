@@ -1,13 +1,13 @@
 /**
- * The small modals: add, edit, rename, pick a folder, save a search.
+ * The small modals: add, edit, rename, save a search. (Choosing a folder is `folder-picker.tsx`.)
  *
  * Each is a controlled component that owns only its draft. Nothing here reaches into the
  * library — they take an `onSubmit` and hand back a value, which is what lets the same
  * prompt serve "rename folder", "rename board", "name this import" and "add a tag" instead
  * of four near-identical dialogs.
  */
-import { Check, FolderInput, Search, Sparkles } from "@/components/icons";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Sparkles } from "@/components/icons";
+import { useEffect, useMemo, useState } from "react";
 
 import type { Bookmark, Folder, SmartCollection } from "@shared/types";
 import { Button } from "@/components/ui/button";
@@ -21,7 +21,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input, Textarea } from "@/components/ui/input";
 import { Label } from "@/components/ui/primitives";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { FolderField } from "./folder-picker";
 import { SMART_COLORS, suggestName } from "@/lib/smart";
 import { normalizeUserUrl } from "@/lib/url-input";
 import { cn } from "@/lib/utils";
@@ -37,6 +37,7 @@ export function TextPromptDialog({
   placeholder,
   initialValue = "",
   confirmLabel = "Save",
+  maxLength = 200,
   onSubmit,
 }: {
   open: boolean;
@@ -47,6 +48,8 @@ export function TextPromptDialog({
   placeholder?: string;
   initialValue?: string;
   confirmLabel?: string;
+  /** Names are shown in one line everywhere; nothing useful is longer than this. */
+  maxLength?: number;
   onSubmit: (value: string) => void;
 }) {
   const [value, setValue] = useState(initialValue);
@@ -78,7 +81,10 @@ export function TextPromptDialog({
               autoFocus
               value={value}
               placeholder={placeholder}
+              maxLength={maxLength}
               onChange={(event) => setValue(event.target.value)}
+              // Opening on a name to change: select it, so typing replaces it.
+              onFocus={(event) => event.currentTarget.select()}
             />
           </div>
           <DialogFooter>
@@ -189,22 +195,7 @@ export function AddBookmarkDialog({
           </div>
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="add-folder">Folder</Label>
-            <Select
-              value={folderId ?? "none"}
-              onValueChange={(value) => setFolderId(value === "none" ? null : value)}
-            >
-              <SelectTrigger id="add-folder" className="w-full">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="none">No folder</SelectItem>
-                {folders.slice(0, 200).map((folder) => (
-                  <SelectItem key={folder.id} value={folder.id}>
-                    {folderPaths.get(folder.id) ?? folder.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <FolderField id="add-folder" value={folderId} onChange={setFolderId} folders={folders} folderPaths={folderPaths} />
           </div>
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="add-note">Note</Label>
@@ -335,22 +326,7 @@ export function EditBookmarkDialog({
           </div>
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="edit-folder">Folder</Label>
-            <Select
-              value={folderId ?? "none"}
-              onValueChange={(value) => setFolderId(value === "none" ? null : value)}
-            >
-              <SelectTrigger id="edit-folder" className="w-full">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="none">No folder</SelectItem>
-                {folders.slice(0, 200).map((folder) => (
-                  <SelectItem key={folder.id} value={folder.id}>
-                    {folderPaths.get(folder.id) ?? folder.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <FolderField id="edit-folder" value={folderId} onChange={setFolderId} folders={folders} folderPaths={folderPaths} />
           </div>
 
           <DialogFooter>
@@ -362,126 +338,6 @@ export function EditBookmarkDialog({
             </Button>
           </DialogFooter>
         </form>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-/* ---------------------------------------------------------- folder picker */
-
-/**
- * Choosing a folder from a list that may hold thousands.
- *
- * A `<Select>` is the wrong control past about thirty options — it cannot be searched, and
- * a scroll through four hundred paths is not a choice anybody makes. This is a filtered
- * list, ranked by how well the path matches, capped at what fits.
- */
-export function FolderPickerDialog({
-  open,
-  onOpenChange,
-  folders,
-  folderPaths,
-  count,
-  onPick,
-  onCreate,
-}: {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  folders: Folder[];
-  folderPaths: Map<string, string>;
-  count: number;
-  onPick: (folderId: string | null) => void;
-  onCreate: (name: string) => void;
-}) {
-  const [query, setQuery] = useState("");
-  const inputRef = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    if (open) setQuery("");
-  }, [open]);
-
-  const matches = useMemo(() => {
-    const needle = query.trim().toLowerCase();
-    const entries = folders.map((folder) => ({
-      folder,
-      path: folderPaths.get(folder.id) ?? folder.name,
-    }));
-    const filtered = needle
-      ? entries.filter((entry) => entry.path.toLowerCase().includes(needle))
-      : entries;
-    return filtered.sort((a, b) => a.path.localeCompare(b.path)).slice(0, 80);
-  }, [folders, folderPaths, query]);
-
-  const exact = matches.some((entry) => entry.path.toLowerCase() === query.trim().toLowerCase());
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-[460px]">
-        <DialogHeader>
-          <DialogTitle>Move {count.toLocaleString()} to a folder</DialogTitle>
-          <DialogDescription>
-            {folders.length.toLocaleString()} folders — start typing to narrow them.
-          </DialogDescription>
-        </DialogHeader>
-
-        <div className="file-search">
-          <Search />
-          <Input
-            ref={inputRef}
-            autoFocus
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder="Find or create a folder"
-          />
-        </div>
-
-        <div className="file-list">
-          <button
-            type="button"
-            onClick={() => {
-              onPick(null);
-              onOpenChange(false);
-            }}
-            className="file-row bs-file-row"
-          >
-            <span className="file-icon">
-              <FolderInput />
-            </span>
-            <span className="file-name">No folder</span>
-          </button>
-          {matches.map((entry) => (
-            <button
-              key={entry.folder.id}
-              type="button"
-              onClick={() => {
-                onPick(entry.folder.id);
-                onOpenChange(false);
-              }}
-              className="file-row bs-file-row"
-            >
-              <span className="file-icon">
-                <FolderInput />
-              </span>
-              <span className="file-name">{entry.path}</span>
-            </button>
-          ))}
-          {!matches.length && !query.trim() ? (
-            <p className="file-empty">No folders yet.</p>
-          ) : null}
-        </div>
-
-        {query.trim() && !exact ? (
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => {
-              onCreate(query.trim());
-              onOpenChange(false);
-            }}
-          >
-            <Check /> Create “{query.trim()}” and move here
-          </Button>
-        ) : null}
       </DialogContent>
     </Dialog>
   );

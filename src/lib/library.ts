@@ -15,24 +15,66 @@ import { canonicalUrl, tokenize, tokenizeDomain } from "./text";
 /** Re-exported so UI modules import sorting from one place. */
 export type { SortMode };
 
-/** Maps folder id to its full "Bookmarks bar / Design / Fonts" path. */
+/**
+ * How deep a folder tree is followed by name.
+ *
+ * Real libraries nest five to ten levels. The limit is for the trees nobody made by hand: a
+ * damaged backup or a hostile file can describe a chain thousands of folders long, and a
+ * full path for each of those is quadratic in text. Imports stop creating folders below this
+ * depth (see `import/normalize.ts`), and paths below it are shortened rather than grown.
+ */
+export const MAX_FOLDER_DEPTH = 32;
+
+/**
+ * Maps folder id to its full "Bookmarks bar / Design / Fonts" path.
+ *
+ * A loop, not recursion: the tree comes from storage, a backup, the browser or the other
+ * copy of the library, and a chain deep enough to overflow the stack would crash every
+ * page load. Each folder is visited once. A folder whose parent is missing, or that sits in
+ * a loop of parents, is treated as top-level instead of being left without a path.
+ */
 export function buildFolderPaths(folders: Folder[]): Map<string, string> {
   const byId = new Map(folders.map((folder) => [folder.id, folder]));
   const paths = new Map<string, string>();
+  const depths = new Map<string, number>();
+  /** For folders below the limit: the path of their ancestor at the limit. */
+  const bases = new Map<string, string>();
 
-  const resolve = (id: string, seen: Set<string>): string => {
-    const cached = paths.get(id);
-    if (cached) return cached;
-    const folder = byId.get(id);
-    if (!folder || seen.has(id)) return "";
-    seen.add(id);
-    const parentPath = folder.parentId ? resolve(folder.parentId, seen) : "";
-    const path = parentPath ? `${parentPath} / ${folder.name}` : folder.name;
-    paths.set(id, path);
-    return path;
-  };
+  for (const start of folders) {
+    if (paths.has(start.id)) continue;
 
-  for (const folder of folders) resolve(folder.id, new Set());
+    // Walk up to the nearest folder that already has a path (or to the top).
+    const chain: Folder[] = [];
+    const onChain = new Set<string>();
+    let cursor: Folder | undefined = start;
+    while (cursor && !paths.has(cursor.id) && !onChain.has(cursor.id)) {
+      chain.push(cursor);
+      onChain.add(cursor.id);
+      cursor = cursor.parentId ? byId.get(cursor.parentId) : undefined;
+    }
+
+    const resolved = cursor && paths.has(cursor.id) ? cursor : undefined;
+    let parentPath = resolved ? (paths.get(resolved.id) ?? "") : "";
+    let depth = resolved ? (depths.get(resolved.id) ?? 0) : 0;
+    let base = resolved ? (bases.get(resolved.id) ?? parentPath) : "";
+
+    // Then back down, naming each folder from its parent.
+    for (let position = chain.length - 1; position >= 0; position -= 1) {
+      const folder = chain[position];
+      depth += 1;
+      let path: string;
+      if (depth <= MAX_FOLDER_DEPTH) {
+        path = parentPath ? `${parentPath} / ${folder.name}` : folder.name;
+        base = path;
+      } else {
+        path = `${base} / … / ${folder.name}`;
+        bases.set(folder.id, base);
+      }
+      paths.set(folder.id, path);
+      depths.set(folder.id, depth);
+      parentPath = path;
+    }
+  }
   return paths;
 }
 
@@ -63,7 +105,19 @@ export function compareFolders(a: Folder, b: Folder): number {
   return a.name.localeCompare(b.name);
 }
 
+/**
+ * Children by parent, kept per folder list.
+ *
+ * The folder list is replaced, never edited in place, so the array itself is the version.
+ * Without this the tree was regrouped and every sibling list re-sorted on each keystroke of
+ * a search inside a folder, because selection asks for the subtree every time.
+ */
+const childrenCache = new WeakMap<Folder[], Map<string | null, Folder[]>>();
+
+/** Sibling lists in display order, keyed by parent id. Shared: callers must not change them. */
 export function folderChildren(folders: Folder[]): Map<string | null, Folder[]> {
+  const cached = childrenCache.get(folders);
+  if (cached) return cached;
   const children = new Map<string | null, Folder[]>();
   for (const folder of folders) {
     const list = children.get(folder.parentId) ?? [];
@@ -73,6 +127,7 @@ export function folderChildren(folders: Folder[]): Map<string | null, Folder[]> 
   for (const list of children.values()) {
     list.sort(compareFolders);
   }
+  childrenCache.set(folders, children);
   return children;
 }
 
@@ -90,6 +145,140 @@ export function folderSubtree(folders: Folder[], rootId: string): Set<string> {
     }
   }
   return result;
+}
+
+/**
+ * Bookmarks in each folder including everything nested under it.
+ *
+ * `counts` is what sits directly in each folder. One walk down from the top and one back up,
+ * with no recursion, so the cost is the number of folders whatever their depth. A folder
+ * that cannot be reached from the top (its parent is missing) is left out; `repairFolders`
+ * moves those to the top level when the library is read.
+ */
+export function folderTotals(folders: Folder[], counts: Map<string, number>): Map<string, number> {
+  const children = folderChildren(folders);
+  const order: Folder[] = [];
+  const seen = new Set<string>();
+  const stack = [...(children.get(null) ?? [])];
+  while (stack.length) {
+    const folder = stack.pop() as Folder;
+    if (seen.has(folder.id)) continue;
+    seen.add(folder.id);
+    order.push(folder);
+    for (const child of children.get(folder.id) ?? []) stack.push(child);
+  }
+
+  const totals = new Map<string, number>();
+  for (const folder of order) totals.set(folder.id, counts.get(folder.id) ?? 0);
+  // Parents come before their children in `order`, so walking it backwards finishes every
+  // child before its total is added to the parent.
+  for (let position = order.length - 1; position >= 0; position -= 1) {
+    const folder = order[position];
+    if (!folder.parentId) continue;
+    const parentTotal = totals.get(folder.parentId);
+    if (parentTotal !== undefined) totals.set(folder.parentId, parentTotal + (totals.get(folder.id) ?? 0));
+  }
+  return totals;
+}
+
+/** The folders above this one, nearest first. Stops at a missing parent or a loop. */
+export function folderAncestors(folders: Folder[], id: string): string[] {
+  const byId = new Map(folders.map((folder) => [folder.id, folder]));
+  const ancestors: string[] = [];
+  const seen = new Set<string>([id]);
+  let cursor = byId.get(id)?.parentId ?? null;
+  while (cursor && byId.has(cursor) && !seen.has(cursor)) {
+    ancestors.push(cursor);
+    seen.add(cursor);
+    cursor = byId.get(cursor)?.parentId ?? null;
+  }
+  return ancestors;
+}
+
+/**
+ * Why a folder cannot be moved under another, in words for the person, or `null` if it can.
+ *
+ * A folder moved into itself or into one of its own subfolders becomes a loop: it and
+ * everything in it drop out of the tree. Checked here, once, for every way a move can be
+ * asked for.
+ *
+ * @param parentId The folder to move into, or `null` for the top level.
+ */
+export function folderMoveProblem(folders: Folder[], id: string, parentId: string | null): string | null {
+  const byId = new Map(folders.map((folder) => [folder.id, folder]));
+  const folder = byId.get(id);
+  if (!folder) return "That folder is no longer here.";
+  if (parentId === null) return null;
+  if (!byId.has(parentId)) return "The folder you chose is no longer here.";
+  if (parentId === id) return "A folder cannot be moved into itself.";
+  if (folderSubtree(folders, id).has(parentId)) return "A folder cannot be moved into one of its own subfolders.";
+
+  // How deep the moved folder's lowest subfolder would end up.
+  const below = (() => {
+    const children = folderChildren(folders);
+    let deepest = 1;
+    const stack: { id: string; depth: number }[] = [{ id, depth: 1 }];
+    const seen = new Set<string>();
+    while (stack.length) {
+      const current = stack.pop() as { id: string; depth: number };
+      if (seen.has(current.id)) continue;
+      seen.add(current.id);
+      deepest = Math.max(deepest, current.depth);
+      for (const child of children.get(current.id) ?? []) stack.push({ id: child.id, depth: current.depth + 1 });
+    }
+    return deepest;
+  })();
+  const above = folderAncestors(folders, parentId).length + 1;
+  if (above + below > MAX_FOLDER_DEPTH) return `Folders can be nested ${MAX_FOLDER_DEPTH} levels deep at most.`;
+  return null;
+}
+
+/** One folder prepared for searching: its path, and both texts folded once. */
+export interface FolderEntry {
+  folder: Folder;
+  path: string;
+  name: string;
+  folded: string;
+}
+
+/** Every folder that may be chosen, in path order. Built when the tree changes, not per keystroke. */
+export function folderEntries(
+  folders: Folder[],
+  folderPaths: Map<string, string>,
+  exclude?: ReadonlySet<string>,
+): FolderEntry[] {
+  const entries: FolderEntry[] = [];
+  for (const folder of folders) {
+    if (exclude?.has(folder.id)) continue;
+    const path = folderPaths.get(folder.id) ?? folder.name;
+    entries.push({ folder, path, name: folder.name.toLowerCase(), folded: path.toLowerCase() });
+  }
+  return entries.sort((a, b) => a.path.localeCompare(b.path));
+}
+
+/**
+ * Folders that match what was typed, best first.
+ *
+ * A folder whose own name starts with the text outranks one whose name merely contains it,
+ * which outranks one matched only through a parent's name. Without that order, typing
+ * "design" in a deep tree lists every folder *under* Design before Design itself.
+ * `exact` says whether some folder already has exactly this name or path, which is what
+ * decides whether "create a folder called…" is offered.
+ */
+export function rankFolders(entries: FolderEntry[], query: string): { matches: FolderEntry[]; exact: boolean } {
+  const needle = query.trim().toLowerCase();
+  if (!needle) return { matches: entries, exact: false };
+  const starts: FolderEntry[] = [];
+  const inName: FolderEntry[] = [];
+  const inPath: FolderEntry[] = [];
+  let exact = false;
+  for (const entry of entries) {
+    if (entry.name === needle || entry.folded === needle) exact = true;
+    if (entry.name.startsWith(needle)) starts.push(entry);
+    else if (entry.name.includes(needle)) inName.push(entry);
+    else if (entry.folded.includes(needle)) inPath.push(entry);
+  }
+  return { matches: [...starts, ...inName, ...inPath], exact };
 }
 
 export function documentSource(bookmark: Bookmark, folderPath: string): RawDoc {

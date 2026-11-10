@@ -3,7 +3,7 @@ import { toast } from "sonner";
 
 import { onMirrorFailure } from "@/lib/chrome-bookmarks";
 import { classifyWriteFailure, isReported, retryUnsaved, subscribeWriteHealth, writeHealth, type WriteHealth } from "@/lib/db";
-import { IS_EXTENSION } from "@/lib/env";
+import { BROWSER_NAME, IS_EXTENSION } from "@/lib/env";
 import { log } from "@/lib/log";
 
 /**
@@ -168,11 +168,11 @@ export function useAppSafeguards({ itemCount }: { itemCount: number }): void {
       if (now - lastShown < 10_000) return;
       lastShown = now;
       const undone = operation === "remove" || operation === "remove-folder";
-      toast.warning("A change could not be copied to Chrome’s bookmarks", {
+      toast.warning(`A change could not be copied to ${BROWSER_NAME}’s bookmarks`, {
         id: "chrome-mirror",
         description: undone
-          ? "Chrome still has it, so it may reappear the next time the two sync. Try the change again, or make it in Chrome’s bookmark manager."
-          : "It is kept here, but Chrome’s bookmarks are not updated. Try the change again, or make it in Chrome’s bookmark manager.",
+          ? `${BROWSER_NAME} still has it, so it may reappear the next time the two sync. Try the change again, or make it in ${BROWSER_NAME}’s bookmark manager.`
+          : `It is kept here, but ${BROWSER_NAME}’s bookmarks are not updated. Try the change again, or make it in ${BROWSER_NAME}’s bookmark manager.`,
       });
     });
   }, []);

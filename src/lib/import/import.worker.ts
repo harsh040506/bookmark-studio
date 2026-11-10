@@ -149,11 +149,13 @@ self.addEventListener("message", (event: MessageEvent<ImportRequest>) => {
       bookmarks: request.previewOnly ? [] : result.bookmarks,
       newFolders: request.previewOnly ? [] : result.folders,
     });
-  } catch (error) {
+  } catch {
     post({
       id: request.id,
       ok: false,
-      error: error instanceof Error ? error.message : "The file could not be read.",
+      // Not the error's own text: "Maximum call stack size exceeded" helps nobody choose
+      // a different file.
+      error: "This file could not be read. It may be damaged, or in a different format from the one chosen.",
       parser: request.parser ?? request.parsers[0],
       warnings: [],
       skipped: 0,

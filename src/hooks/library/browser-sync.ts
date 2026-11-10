@@ -24,9 +24,13 @@ import {
   buildFolderPaths,
   
 } from "../../lib/library";
-import { IS_EXTENSION } from "../../lib/env";
+import { BROWSER_NAME, IS_EXTENSION } from "../../lib/env";
+import { PendingChanges } from "../../lib/pending-changes";
 import { persistAndAnnounce, touched } from "./shared";
 import type { LibraryCore } from "./core";
+
+/** Long enough to gather a burst, short enough that one starred page appears at once. */
+const EVENT_BATCH_MS = 80;
 
 export function useBrowserSync(core: LibraryCore) {
   const {
@@ -61,8 +65,11 @@ export function useBrowserSync(core: LibraryCore) {
       const current = bookmarksRef.current;
       const nextById = new Map(next.map((row) => [row.id, row]));
       const removing = new Set(remove);
+      // A set, not a search of the list per row: reconciling ten thousand bookmarks against
+      // ten thousand was a hundred million comparisons on the main thread.
+      const known = new Set(current.map((row) => row.id));
       const survivors = current.filter((row) => !removing.has(row.id)).map((row) => nextById.get(row.id) ?? row);
-      const created = next.filter((row) => !current.some((existing) => existing.id === row.id));
+      const created = next.filter((row) => !known.has(row.id) && !removing.has(row.id));
       const updated = created.length ? [...created, ...survivors] : survivors;
 
       setBookmarks(updated);
@@ -80,14 +87,16 @@ export function useBrowserSync(core: LibraryCore) {
     const current = foldersRef.current;
     const nextById = new Map(next.map((row) => [row.id, row]));
     const removing = new Set(remove);
+    const known = new Set(current.map((row) => row.id));
     const survivors = current.filter((row) => !removing.has(row.id)).map((row) => nextById.get(row.id) ?? row);
-    const created = next.filter((row) => !current.some((existing) => existing.id === row.id));
+    const created = next.filter((row) => !known.has(row.id) && !removing.has(row.id));
     const updated = created.length ? [...survivors, ...created] : survivors;
 
     setFolders(updated);
     foldersRef.current = updated;
-    void db.putFolders(next);
-    if (remove.length) void db.deleteFolders(remove);
+    // A failed write is tracked and retried by the storage layer, which also tells the person.
+    if (next.length) void db.putFolders(next).catch(() => undefined);
+    if (remove.length) void db.deleteFolders(remove).catch(() => undefined);
   }, []);
 
   /** Detaches the Chrome bookmarks listeners on unmount. A no-op until sync starts. */
@@ -95,26 +104,88 @@ export function useBrowserSync(core: LibraryCore) {
   /** Whether listeners are attached, so a late-arriving extension starts sync exactly once. */
   const browserSyncRunning = useRef(false);
 
+  /* --------------------------------------------- events, applied in batches -- */
+
+  /**
+   * Changes from the browser that have arrived but are not in the library yet, applied
+   * together a moment later instead of one at a time (see `lib/pending-changes.ts`).
+   */
+  const pendingRowsRef = useRef(new PendingChanges<Bookmark>());
+  const pendingFoldersRef = useRef(new PendingChanges<Folder>());
+  const flushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** Rows by id for the library as it is now, rebuilt only when the list is replaced. */
+  const rowLookupRef = useRef<{ rows: Bookmark[]; byId: Map<string, Bookmark> } | null>(null);
+  const folderLookupRef = useRef<{ rows: Folder[]; byId: Map<string, Folder> } | null>(null);
+
+  const storedRow = useCallback((id: string): Bookmark | undefined => {
+    const rows = bookmarksRef.current;
+    if (rowLookupRef.current?.rows !== rows) {
+      rowLookupRef.current = { rows, byId: new Map(rows.map((row) => [row.id, row])) };
+    }
+    return rowLookupRef.current.byId.get(id);
+  }, []);
+
+  const storedFolder = useCallback((id: string): Folder | undefined => {
+    const rows = foldersRef.current;
+    if (folderLookupRef.current?.rows !== rows) {
+      folderLookupRef.current = { rows, byId: new Map(rows.map((row) => [row.id, row])) };
+    }
+    return folderLookupRef.current.byId.get(id);
+  }, []);
+
+  const flushChromeEvents = useCallback(() => {
+    if (flushTimerRef.current) {
+      clearTimeout(flushTimerRef.current);
+      flushTimerRef.current = null;
+    }
+    if (pendingRowsRef.current.empty && pendingFoldersRef.current.empty) return;
+    try {
+      // Folders first, so a bookmark never arrives ahead of the folder it is filed in.
+      const folders = pendingFoldersRef.current.take(storedFolder);
+      applyChromeFolderChanges(folders.upserts, folders.removals);
+      const rows = pendingRowsRef.current.take(storedRow);
+      applyChromeBookmarkChanges(rows.upserts, rows.removals);
+    } catch (error) {
+      // Nothing is lost for good: the next open compares the whole tree again.
+      log.warn("browser-sync.apply-failed", { error });
+    }
+  }, [applyChromeBookmarkChanges, applyChromeFolderChanges, storedFolder, storedRow]);
+
+  const scheduleFlush = useCallback(() => {
+    // Counted from the first event, not the last: a steady stream must not postpone it forever.
+    flushTimerRef.current ??= setTimeout(flushChromeEvents, EVENT_BATCH_MS);
+  }, [flushChromeEvents]);
+
   /**
    * Reads the whole Chrome tree and folds it in, then (re)builds the text index over the
    * result. Used both on first open and after a bulk change on the Chrome side (its own
    * "import bookmarks" dialog, for instance) that would be wasteful to apply event by
    * event.
+   *
+   * Only what differs is written. An unchanged library costs one read of the tree and
+   * nothing else: no storage writes, nothing sent to the other copy, no index rebuild.
    */
   const reconcileAndReindex = useCallback(async () => {
-    const result = await reconcileChromeBookmarks(bookmarksRef.current, foldersRef.current);
-    applyChromeFolderChanges(result.folders);
-    applyChromeBookmarkChanges(result.bookmarks, result.removedBookmarkIds);
+    // Anything still waiting belongs to the tree as it was; apply it before comparing.
+    flushChromeEvents();
+    const result = await reconcileChromeBookmarks(() => ({
+      bookmarks: bookmarksRef.current,
+      folders: foldersRef.current,
+    }));
+    applyChromeFolderChanges(result.changedFolders, result.removedFolderIds);
+    applyChromeBookmarkChanges(result.changedBookmarks, result.removedBookmarkIds);
 
-    const removedSet = new Set(result.removedBookmarkIds);
-    const freshById = new Map(result.bookmarks.map((row) => [row.id, row]));
-    const merged = [
-      ...result.bookmarks,
-      ...bookmarksRef.current.filter((row) => !freshById.has(row.id) && !removedSet.has(row.id)),
-    ];
-    void rebuildTextIndex(merged, buildFolderPaths(result.folders));
+    if (
+      result.changedFolders.length ||
+      result.changedBookmarks.length ||
+      result.removedBookmarkIds.length ||
+      result.removedFolderIds.length
+    ) {
+      // A renamed or moved folder changes the searchable path of rows that did not change.
+      void rebuildTextIndex(bookmarksRef.current, buildFolderPaths(foldersRef.current));
+    }
     return result;
-  }, [applyChromeBookmarkChanges, applyChromeFolderChanges, rebuildTextIndex]);
+  }, [applyChromeBookmarkChanges, applyChromeFolderChanges, flushChromeEvents, rebuildTextIndex]);
 
   /**
    * Starts two-way sync with the browser's bookmarks, when it is allowed and reachable.
@@ -134,8 +205,8 @@ export function useBrowserSync(core: LibraryCore) {
         const chromeSource: Source = {
           id: CHROME_SOURCE_ID,
           kind: "browser",
-          name: IS_EXTENSION ? "Chrome" : "This browser",
-          browser: "Chrome",
+          name: IS_EXTENSION ? BROWSER_NAME : "This browser",
+          browser: BROWSER_NAME,
           createdAt: Date.now(),
           syncedAt: Date.now(),
           resyncable: false,
@@ -144,15 +215,27 @@ export function useBrowserSync(core: LibraryCore) {
         return [...current, chromeSource];
       });
 
-      chromeSyncCleanupRef.current = startChromeSync({
-        onBookmarkUpserted: (bookmark) => applyChromeBookmarkChanges([bookmark]),
-        onBookmarkRemoved: (ids) => applyChromeBookmarkChanges([], ids),
-        onFolderUpserted: (folder) => applyChromeFolderChanges([folder]),
-        onFolderRemoved: (ids) => applyChromeFolderChanges([], ids),
-        onBulkChange: () => void reconcileAndReindex(),
-        getBookmarks: () => bookmarksRef.current,
-        getFolders: () => foldersRef.current,
+      const queue = <A extends unknown[]>(change: (...args: A) => void) => (...args: A) => {
+        change(...args);
+        scheduleFlush();
+      };
+      const stopListening = startChromeSync({
+        onBookmarkCreated: queue((bookmark: Bookmark) => pendingRowsRef.current.create(bookmark)),
+        onBookmarkPatched: queue((id: string, patch: Partial<Bookmark>) => pendingRowsRef.current.patch(id, patch)),
+        onBookmarkRemoved: queue((ids: string[]) => pendingRowsRef.current.remove(ids)),
+        onFolderCreated: queue((folder: Folder) => pendingFoldersRef.current.create(folder)),
+        onFolderPatched: queue((id: string, patch: Partial<Folder>) => pendingFoldersRef.current.patch(id, patch)),
+        onFolderRemoved: queue((ids: string[]) => pendingFoldersRef.current.remove(ids)),
+        onBulkChange: () =>
+          void reconcileAndReindex().catch((error: unknown) => log.warn("browser-sync.bulk-change-failed", { error })),
+        findBookmark: (id) => pendingRowsRef.current.find(id, storedRow),
+        findFolder: (id) => pendingFoldersRef.current.find(id, storedFolder),
       });
+      chromeSyncCleanupRef.current = () => {
+        stopListening();
+        // Whatever has arrived is still true; write it before going quiet.
+        flushChromeEvents();
+      };
       browserSyncRunning.current = true;
       return true;
     } catch (error) {
@@ -162,7 +245,7 @@ export function useBrowserSync(core: LibraryCore) {
       log.warn("browser-sync.start-failed", { error });
       return false;
     }
-  }, [reconcileAndReindex, applyChromeBookmarkChanges, applyChromeFolderChanges]);
+  }, [reconcileAndReindex, flushChromeEvents, scheduleFlush, storedFolder, storedRow]);
 
   /** Switches browser-bookmark sync on or off (the website's opt-in; always on in the extension). */
   const setBrowserSync = useCallback(

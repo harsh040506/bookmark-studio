@@ -44,7 +44,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import type { ThemePreference } from "@/hooks/useTheme";
 import { assetStats, clearAssets } from "@/lib/assets";
 import { writeHealth } from "@/lib/db";
-import { APP_VERSION, EXTENSION_STORE_URL, IS_EXTENSION, REPOSITORY_URL } from "@/lib/env";
+import { APP_VERSION, BROWSER_NAME, EXTENSION_STORE_URL, IS_EXTENSION, IS_FIREFOX, REPOSITORY_URL } from "@/lib/env";
 import { diagnosticsReport } from "@/lib/log";
 import { formatRelative } from "@/lib/library";
 import { requestBridgeAccess } from "@/lib/bridge";
@@ -61,6 +61,9 @@ const TABS: { id: SettingsTab; label: string; icon: ReactNode }[] = [
   { id: "data", label: "Data", icon: <Database /> },
   { id: "about", label: "About", icon: <Info /> },
 ];
+
+/** The build of the extension this browser can load. */
+const EXTENSION_ZIP = IS_FIREFOX ? "bookmark-studio-extension-firefox.zip" : "bookmark-studio-extension.zip";
 
 /* ---------------------------------------------------------------- atoms */
 
@@ -119,10 +122,13 @@ function CodeLine({ code }: { code: string }) {
         className="icon-btn"
         aria-label="Copy"
         onClick={() => {
-          void navigator.clipboard.writeText(code).then(() => {
-            setCopied(true);
-            setTimeout(() => setCopied(false), 1200);
-          });
+          void navigator.clipboard.writeText(code).then(
+            () => {
+              setCopied(true);
+              setTimeout(() => setCopied(false), 1200);
+            },
+            () => toast.error("Could not copy to the clipboard", { description: "Select the text and copy it by hand." }),
+          );
         }}
       >
         {copied ? <Check size={15} /> : <Copy size={15} />}
@@ -197,7 +203,7 @@ export function SettingsDialog({
   const [hostedZip, setHostedZip] = useState<string | null>(null);
   useEffect(() => {
     if (!open || IS_EXTENSION || hostedZip !== null) return;
-    const url = new URL("bookmark-studio-extension.zip", document.baseURI).toString();
+    const url = new URL(EXTENSION_ZIP, document.baseURI).toString();
     void fetch(url, { method: "HEAD", cache: "no-store" })
       .then((response) => setHostedZip(response.ok && !(response.headers.get("content-type") ?? "").includes("html") ? url : ""))
       .catch(() => setHostedZip(""));
@@ -347,7 +353,9 @@ export function SettingsDialog({
                   <Chrome />
                   <div className="min-w-0 flex-1">
                     <p className="bs-option-title">The Bookmark Studio extension</p>
-                    <p className="bs-option-text">For Chrome, Edge, Brave, Arc, Opera and Vivaldi. Works with this website and as its own app.</p>
+                    <p className="bs-option-text">
+                      For Chrome, Edge, Brave, Arc, Opera, Vivaldi and Firefox 128 or newer. Works with this website and as its own app.
+                    </p>
                   </div>
                   {runtime.extension ? (
                     <Badge variant="success">
@@ -388,24 +396,38 @@ export function SettingsDialog({
                               <a href={hostedZip} download>
                                 Download the extension
                               </a>{" "}
-                              (a small zip) and unzip it.
+                              (a small zip){IS_FIREFOX ? "." : " and unzip it."}
                             </>
                           ) : (
                             <>
-                              Download <b>bookmark-studio-extension.zip</b> from the{" "}
+                              Download <b>{EXTENSION_ZIP}</b> from the{" "}
                               <a href={`${REPOSITORY_URL}/releases/latest`} target="_blank" rel="noreferrer">
                                 latest release
-                              </a>{" "}
-                              and unzip it.
+                              </a>
+                              {IS_FIREFOX ? "." : " and unzip it."}
                             </>
                           )}
                         </li>
-                        <li>
-                          Open <code>chrome://extensions</code> and switch on <b>Developer mode</b> (top right).
-                        </li>
-                        <li>
-                          Click <b>Load unpacked</b>, choose the unzipped folder, then come back to this tab.
-                        </li>
+                        {IS_FIREFOX ? (
+                          <>
+                            <li>
+                              Open <code>about:debugging</code> and choose <b>This Firefox</b>.
+                            </li>
+                            <li>
+                              Click <b>Load Temporary Add-on</b>, pick the zip, then come back to this tab. Firefox removes
+                              unsigned add-ons when it restarts, so this is for trying it out.
+                            </li>
+                          </>
+                        ) : (
+                          <>
+                            <li>
+                              Open <code>chrome://extensions</code> and switch on <b>Developer mode</b> (top right).
+                            </li>
+                            <li>
+                              Click <b>Load unpacked</b>, choose the unzipped folder, then come back to this tab.
+                            </li>
+                          </>
+                        )}
                       </>
                     )}
                   </ol>
@@ -426,7 +448,7 @@ export function SettingsDialog({
                   <div className="min-w-0 flex-1">
                     <p className="bs-option-title">Run it on your computer</p>
                     <p className="bs-option-text">
-                      Any browser. Previews are rendered in headless Chrome or Edge, with no capture windows. Needs Node.js 20 or newer.
+                      Any browser. Previews are rendered in headless Chrome or Edge, with no capture windows. Needs Node.js 22.12 or newer, or Docker.
                     </p>
                   </div>
                   {runtime.server ? (
@@ -605,8 +627,15 @@ export function SettingsDialog({
                       confirmLabel: "Clear images",
                     });
                     if (!ok) return;
-                    await clearAssets();
+                    const freed = assetStats().bytes;
+                    try {
+                      await clearAssets();
+                    } catch {
+                      toast.error("The stored images could not be cleared", { description: "Nothing was removed. Try again in a moment." });
+                      return;
+                    }
                     setStorage(assetStats());
+                    toast.success("Stored images cleared", { description: `${formatBytes(freed)} freed. Previews come back as you scroll.` });
                   }}
                 >
                   <Trash2 /> Clear
@@ -680,7 +709,7 @@ export function SettingsDialog({
                   <div className="form-row-hint bs-hint-wide">
                     Deletes every bookmark, folder, board, collection and stored image in this browser. This cannot be undone — export a
                     backup first.
-                    {IS_EXTENSION ? " Your Chrome bookmarks themselves are not touched." : ""}
+                    {IS_EXTENSION ? ` Your ${BROWSER_NAME} bookmarks themselves are not touched.` : ""}
                   </div>
                 </div>
                 <Button
